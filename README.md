@@ -33,12 +33,16 @@
 
 ## 📸 Screenshots
 
-*(You can add images here later by uploading them to your GitHub repository and linking them like this)*
+*(Add your screenshots here by dragging and dropping images into the GitHub editor)*
 
-![Dashboard View](https://via.placeholder.com/800x400.png?text=Dashboard+Interface)
+```text
+[Dashboard Screenshot will go here]
+```
 *The main dashboard for configuring and launching WebSocket security scans.*
 
-![Interceptor View](https://via.placeholder.com/800x400.png?text=Live+Interceptor)
+```text
+[Interceptor Screenshot will go here]
+```
 *Real-time traffic interceptor highlighting potentially malicious payloads.*
 
 ## 📁 Project Structure
