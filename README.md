@@ -31,6 +31,16 @@
 | 🔔 **Notifications** | Browser notifications + sound on scan complete |
 | 📱 **Responsive UI** | Works on desktop, tablet, and mobile screens |
 
+## 📸 Screenshots
+
+*(You can add images here later by uploading them to your GitHub repository and linking them like this)*
+
+![Dashboard View](https://via.placeholder.com/800x400.png?text=Dashboard+Interface)
+*The main dashboard for configuring and launching WebSocket security scans.*
+
+![Interceptor View](https://via.placeholder.com/800x400.png?text=Live+Interceptor)
+*Real-time traffic interceptor highlighting potentially malicious payloads.*
+
 ## 📁 Project Structure
 
 ```
@@ -208,6 +218,16 @@ python main.py --dashboard
 3. Click **▶ Start Scan** (or press `Ctrl+Enter`)
 4. View results in tabs: Findings | Bug Bounty | Live Log | Interceptor | AI Analysis | History
 5. Export reports: **📄 Download PDF** (hover for more formats: HTML, SARIF, JSON)
+
+### 💡 Example Penetration Testing Session
+
+Here is how a typical assessment flows using WS Tester Pro:
+
+1. **Discovery & Recon**: You connect to a target application, right-click, select "Inspect", and go to the "Network" tab, then filter by "WS". You spot a connection to `wss://api.target.com/v1/chat`.
+2. **Initial Scan**: You open WS Tester Pro, paste the URL into the **Target** field, select **Fast mode**, and click Start.
+3. **Deep Analysis**: The Fast mode scan returns an "Authentication Bypass" finding. Unchecking Fast mode, you select the **JWT attacks** flag and re-run the scan to perform a deep analysis of how their tokens are verified.
+4. **Traffic Interception**: To understand exactly how the payload works, you switch to the **Interceptor** mode, configure the proxy, and capture the exact traffic flowing during the exploit.
+5. **Reporting**: You switch to the **Bug Bounty** tab, click **Copy** next to the critical finding, and paste the markdown directly into your bug report. Finally, you download a PDF report using the **📄 Download PDF** button to share with the client.
 
 ---
 
