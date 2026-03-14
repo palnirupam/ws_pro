@@ -1,0 +1,225 @@
+<!-- HTML structure -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WS Tester Pro — WebSocket Security Scanner</title>
+<meta name="description" content="Professional WebSocket penetration testing tool with real-time dashboard, 20+ automated security tests, and OWASP-format reports.">
+<link rel="stylesheet" href="/static/css/app.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+</head>
+<body>
+
+<!-- ── Header ─────────────────────────────────────────────────── -->
+<div class="header">
+  <div class="logo">
+    <div class="logo-icon">🔐</div>
+    <div>
+      <h1>WS Tester Pro</h1>
+      <p>Advanced WebSocket Security Assessment</p>
+    </div>
+  </div>
+  <div class="header-right">
+    <button class="theme-btn" id="themeBtn" onclick="toggleTheme()" title="Toggle theme (Ctrl+Shift+T)">☀️</button>
+    <div class="status-row">
+      <div class="sdot idle" id="statusDot"></div>
+      <span id="statusText">Idle</span>
+    </div>
+  </div>
+</div>
+
+<div class="layout">
+
+  <!-- ── Sidebar ──────────────────────────────────────────────── -->
+  <div class="sidebar">
+
+    <div class="card">
+      <h3>🎯 Target</h3>
+      <input type="text" id="targetUrl" placeholder="https://target.com" autocomplete="off" spellcheck="false"/>
+    </div>
+
+    <div class="card">
+      <h3>🔑 AI API Key</h3>
+      <div class="key-wrap">
+        <input type="password" id="apiKeyInput" placeholder="sk-ant-api03-..." autocomplete="off" spellcheck="false"/>
+        <span class="key-eye" onclick="toggleKeyVis()">👁</span>
+      </div>
+      <button class="btn btn-secondary" onclick="saveApiKey()" style="font-size:.75rem;padding:6px 10px">💾 Save Key</button>
+      <div id="apiKeyStatus">—</div>
+    </div>
+
+    <div class="card">
+      <h3>⚙️ Options</h3>
+      <div class="opt-row"><input type="checkbox" id="optAI"        checked><label for="optAI">🤖 AI analysis</label></div>
+      <div class="opt-row"><input type="checkbox" id="optPlaywright" checked><label for="optPlaywright">🌐 Browser discovery</label></div>
+      <div class="opt-row"><input type="checkbox" id="optJWT"        checked><label for="optJWT">🔑 JWT attacks</label></div>
+      <div class="opt-row"><input type="checkbox" id="optTiming"            ><label for="optTiming">⏱ Timing attacks</label></div>
+      <div class="opt-row"><input type="checkbox" id="optFastMode"   checked><label for="optFastMode">⚡ Fast mode</label></div>
+      <div class="opt-row"><input type="checkbox" id="optIntercept"         ><label for="optIntercept">🕵️ Interceptor</label></div>
+      <div class="divider"></div>
+      <label style="font-size:.73rem;color:var(--text2)">Concurrent threads</label>
+      <select id="concurrentCount">
+        <option value="3">3 — Safe</option>
+        <option value="5" selected>5 — Normal</option>
+        <option value="10">10 — Aggressive</option>
+      </select>
+    </div>
+
+    <div class="card" id="interceptorCard" style="display:none">
+      <h3>🕵️ Interceptor Config</h3>
+      <input type="text"   id="interceptWsUrl"  placeholder="wss://target.com/ws"/>
+      <input type="number" id="interceptPort"    value="8765"/>
+      <button class="btn btn-secondary" onclick="startInterceptor()" style="font-size:.76rem">▶ Start Proxy</button>
+    </div>
+
+    <div class="divider"></div>
+
+    <button class="btn btn-primary"   id="scanBtn" onclick="startScan()" title="Ctrl+Enter">▶ Start Scan</button>
+    <div class="btn-group">
+      <button class="btn btn-danger"    id="stopBtn" onclick="stopScan()" disabled title="Escape">⏹ Stop</button>
+      <button class="btn btn-warning"   id="pauseBtn" onclick="pauseScan()" disabled>⏸ Pause</button>
+    </div>
+    <button class="btn btn-secondary" onclick="resumeScan()" id="resumeBtn" style="display:none">🔄 Resume Scan</button>
+    <button class="btn btn-secondary" onclick="clearAll()">🗑 Clear Results</button>
+
+    <!-- Export Menu -->
+    <div class="export-menu">
+      <button class="btn btn-secondary" onclick="toggleExportMenu(event)" id="exportToggle">📄 Export / Download ▾</button>
+      <div class="export-dropdown" id="exportDropdown">
+        <button class="btn btn-secondary" onclick="downloadReport(); closeExportMenu()">📄 Download PDF</button>
+        <button class="btn btn-secondary" onclick="downloadHTML(); closeExportMenu()">🌐 Download HTML</button>
+        <button class="btn btn-secondary" onclick="downloadSARIF(); closeExportMenu()">📋 Download SARIF</button>
+        <button class="btn btn-secondary" onclick="downloadJSON(); closeExportMenu()">📦 Download JSON</button>
+        <button class="btn btn-secondary" onclick="exportFindings(); closeExportMenu()">💾 Export Findings</button>
+        <button class="btn btn-secondary" onclick="importFindings(); closeExportMenu()">📂 Import Findings</button>
+      </div>
+    </div>
+
+    <!-- Session -->
+    <div class="divider"></div>
+    <button class="btn btn-secondary btn-sm" onclick="saveSession()" title="Ctrl+Shift+S">💾 Save Session</button>
+    <button class="btn btn-secondary btn-sm" onclick="loadHistory()">📂 View History</button>
+
+    <div>
+      <div class="prog-wrap"><div class="prog-bar" id="progressBar" style="width:0%"></div></div>
+      <div id="progressText">Ready</div>
+    </div>
+
+    <div class="shortcuts-info">
+      <kbd>Ctrl</kbd>+<kbd>Enter</kbd> Start · <kbd>Esc</kbd> Stop<br>
+      <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> Theme<br>
+      <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> Save<br>
+      <kbd>Alt</kbd>+<kbd>1-6</kbd> Tabs
+    </div>
+
+  </div>
+
+  <!-- ── Main ─────────────────────────────────────────────────── -->
+  <div class="main">
+
+    <!-- Stats -->
+    <div class="stats-bar">
+      <div class="stat c-critical"><h2 id="sCrit">0</h2><p>Critical</p></div>
+      <div class="stat c-high">    <h2 id="sHigh">0</h2><p>High</p></div>
+      <div class="stat c-medium">  <h2 id="sMed">0</h2> <p>Medium</p></div>
+      <div class="stat c-low">     <h2 id="sLow">0</h2> <p>Low</p></div>
+      <div class="stat c-total">   <h2 id="sTotal">0</h2><p>Total</p></div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tabs">
+      <button class="tab active" onclick="showTab('findings',this)">🚨 Findings</button>
+      <button class="tab"        onclick="showTab('bounty',this)">🎯 Bug Bounty</button>
+      <button class="tab"        onclick="showTab('log',this)">📋 Live Log</button>
+      <button class="tab"        onclick="showTab('interceptor',this)">🕵️ Interceptor</button>
+      <button class="tab"        onclick="showTab('ai',this)">🤖 AI Analysis</button>
+      <button class="tab"        onclick="showTab('history',this)">📂 History</button>
+    </div>
+
+    <!-- Pane: Findings -->
+    <div class="tab-pane active" id="pane-findings">
+      <div class="findings-toolbar">
+        <span class="toolbar-label">Sort:</span>
+        <button class="sort-btn active" data-sort="time" onclick="sortFindings('time')">⏱ Time</button>
+        <button class="sort-btn" data-sort="severity" onclick="sortFindings('severity')">🔴 Severity</button>
+        <button class="sort-btn" data-sort="endpoint" onclick="sortFindings('endpoint')">📡 Endpoint</button>
+        <span class="toolbar-label" style="margin-left:10px">Filter:</span>
+        <button class="filter-btn active" data-filter="all" onclick="filterFindings('all')">All</button>
+        <button class="filter-btn" data-filter="CRITICAL" onclick="filterFindings('CRITICAL')">Critical</button>
+        <button class="filter-btn" data-filter="HIGH" onclick="filterFindings('HIGH')">High</button>
+        <button class="filter-btn" data-filter="MEDIUM" onclick="filterFindings('MEDIUM')">Medium</button>
+        <button class="filter-btn" data-filter="LOW" onclick="filterFindings('LOW')">Low</button>
+      </div>
+      <div id="findingsBox">
+        <div class="empty-state"><div class="icon">🔍</div><p>Enter a target URL and click Start Scan</p></div>
+      </div>
+    </div>
+
+    <!-- Pane: Bug Bounty -->
+    <div class="tab-pane" id="pane-bounty">
+      <div class="bounty-header">
+        <h3 style="color:var(--blue);font-size:.85rem;margin-bottom:6px">🎯 Bug Bounty Report Generator</h3>
+        <p style="color:var(--text2);font-size:.74rem;margin-bottom:10px">Click any finding below to copy a HackerOne/Bugcrowd-ready markdown report to clipboard.</p>
+        <button class="btn btn-secondary" style="width:auto;padding:5px 12px;font-size:.74rem" onclick="copyAllBounty()">📋 Copy All Findings</button>
+      </div>
+      <div id="bountyList">
+        <div class="empty-state"><div class="icon">🎯</div><p>Run a scan first — findings will appear here</p></div>
+      </div>
+    </div>
+
+    <!-- Pane: Log -->
+    <div class="tab-pane" id="pane-log">
+      <div id="log"></div>
+    </div>
+
+    <!-- Pane: Interceptor -->
+    <div class="tab-pane" id="pane-interceptor">
+      <div class="interceptor-toolbar">
+        <input type="text" id="interceptSearch" placeholder="🔍 Search messages..." oninput="filterInterceptor()" style="flex:1;margin-bottom:0" />
+        <select id="interceptDirFilter" onchange="filterInterceptor()" style="width:auto;min-width:120px;margin-bottom:0">
+          <option value="all">All</option>
+          <option value="client">Client→Server</option>
+          <option value="server">Server→Client</option>
+        </select>
+        <span style="font-size:.74rem;color:var(--text2)">Msgs: <b id="msgCount" style="color:var(--blue)">0</b></span>
+        <span style="font-size:.74rem;color:var(--text2)">Flagged: <b id="flagCount" style="color:var(--red)">0</b></span>
+        <button class="btn btn-secondary" style="width:auto;padding:4px 10px;font-size:.72rem" onclick="exportMessages()">💾 Export</button>
+        <button class="btn btn-secondary" style="width:auto;padding:4px 10px;font-size:.72rem" onclick="clearInterceptorUI()">🗑 Clear</button>
+      </div>
+      <div id="interceptorLog">
+        <div class="empty-state"><div class="icon">🕵️</div><p>Enable interceptor and start proxy</p></div>
+      </div>
+    </div>
+
+    <!-- Pane: AI -->
+    <div class="tab-pane" id="pane-ai">
+      <button class="btn btn-secondary" style="width:auto;padding:7px 15px;margin-bottom:11px;font-size:.78rem" onclick="rerunAI()">🤖 Re-analyze with AI</button>
+      <div id="ai-output">AI analysis will appear here after scan completes...</div>
+    </div>
+
+    <!-- Pane: History -->
+    <div class="tab-pane" id="pane-history">
+      <h3 style="color:var(--blue);font-size:.85rem;margin-bottom:10px">📂 Scan History</h3>
+      <div id="historyList">
+        <div class="empty-state"><div class="icon">📂</div><p>No saved sessions yet. Save a session after scanning.</p></div>
+      </div>
+      <div class="divider" style="margin:15px 0"></div>
+      <h3 style="color:var(--blue);font-size:.85rem;margin-bottom:10px">📊 Compare Sessions</h3>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input type="number" id="compareA" placeholder="Session #A" style="width:120px"/>
+        <span style="color:var(--text2)">vs</span>
+        <input type="number" id="compareB" placeholder="Session #B" style="width:120px"/>
+        <button class="btn btn-secondary" style="width:auto;padding:6px 14px;font-size:.76rem" onclick="compareSessions()">📊 Compare</button>
+      </div>
+      <div id="comparisonResult"></div>
+    </div>
+
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+<script src="/static/js/app.js"></script>
+</body>
+</html>
