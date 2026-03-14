@@ -44,6 +44,7 @@ from attacks.network import (test_encryption, test_message_size,
                               test_info_disclosure, test_graphql, test_idor)
 from attacks.timing import test_timing
 from attacks.subprotocol import test_subprotocol
+from attacks.fuzzer import test_fuzzing
 from reports.generator import generate_html_report
 from utils.logger import log
 
@@ -676,6 +677,7 @@ def run_scan(target_url: str, options: dict):
     run_jwt       = options.get('jwt', True)
     run_ai        = options.get('ai', True)
     run_timing_   = options.get('timing', False)
+    run_fuzzer_   = options.get('fuzzing', False)
     concurrent    = min(int(options.get('concurrent_count', 5)), 10)
 
     try:
@@ -758,6 +760,9 @@ def run_scan(target_url: str, options: dict):
 
             if run_timing_:
                 tests.append(('Timing attacks', lambda: test_timing(ep, fast_mode=fast_mode)))
+
+            if run_fuzzer_:
+                tests.append(('WebSocket fuzzing', lambda: test_fuzzing(ep, fast_mode=fast_mode)))
 
             for label, coro_factory in tests:
                 if not scan_running:

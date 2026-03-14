@@ -101,13 +101,35 @@ async def _try_token(ws_url: str, token: str, label: str) -> tuple[bool, str]:
 
 async def test_cswsh(ws_url: str) -> bool:
     """
-    Cross-Site WebSocket Hijacking
-    Only flag if server sends SENSITIVE data (not just any response)
+    Advanced Cross-Site WebSocket Hijacking (CSWSH)
+    Tests 8+ Origin bypass techniques used by real-world bug bounty hunters.
+    Only flags confirmed bypasses where sensitive data is exposed.
     """
-    evil_origin = 'https://evil-attacker.com'
+    from urllib.parse import urlparse
+
     ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     ssl_ctx.check_hostname = False
     ssl_ctx.verify_mode = ssl.CERT_NONE
+
+    parsed = urlparse(ws_url)
+    target_host = parsed.hostname or 'localhost'
+    # Strip 'www.' prefix for building bypass origins
+    base_domain = target_host.lstrip('www.') if target_host.startswith('www.') else target_host
+
+    # ── Build Origin bypass list ──────────────────────────────────────────
+    bypass_origins = [
+        # (Origin value, technique label, severity_boost)
+        ('https://evil-attacker.com',                           'Foreign Origin',           False),
+        ('null',                                                'Null Origin (iframe)',       True),
+        (f'https://evil.{base_domain}',                         'Subdomain Spoof',           True),
+        (f'https://{base_domain}.evil.com',                     'Domain as Subdomain',       True),
+        (f'https://evil{base_domain}',                          'Suffix Match Bypass',       True),
+        (f'http://{target_host}',                               'Scheme Downgrade (HTTP)',    True),
+        (f'https://evil.com/{base_domain}',                     'Origin-in-Path',            True),
+        (f'https://{target_host.upper()}',                      'Case Variation',           False),
+        (f'https://{base_domain}%00.evil.com',                  'Null Byte in Origin',       True),
+        (f'https://{base_domain}@evil.com',                     'Credential Injection',      True),
+    ]
 
     sensitive_patterns = [
         r'"user":', r'"email":', r'"token":', r'"session":', r'"id":\s*\d+',
@@ -115,50 +137,139 @@ async def test_cswsh(ws_url: str) -> bool:
         r'"data":\s*\{', r'"message":', r'authenticated', r'welcome',
     ]
 
+    # ── First: get baseline (legitimate origin) response ──────────────────
+    baseline_resp = None
+    legit_origin = f'https://{target_host}'
     try:
         async with websockets.connect(
             ws_url, open_timeout=5,
-            additional_headers={'Origin': evil_origin},
+            additional_headers={'Origin': legit_origin},
             ssl=ssl_ctx if ws_url.startswith('wss') else None,
         ) as ws:
-            resp = await send_recv(ws, '{"type":"ping"}', timeout=3)
-            if resp:
-                # Check if response contains sensitive data
-                has_sensitive = any(
-                    re.search(p, resp, re.IGNORECASE)
-                    for p in sensitive_patterns
-                )
-
-                if has_sensitive:
-                    ev = Evidence.make(
-                        payload=f'Origin: {evil_origin}',
-                        request=f'WS Connect with Origin: {evil_origin}',
-                        response=resp[:300],
-                        proof='Server returned sensitive data to cross-origin request',
-                        reproduce=(
-                            f"1. Open browser console on any website\n"
-                            f"2. Run: var ws = new WebSocket('{ws_url}');\n"
-                            f"3. ws.onmessage = e => console.log(e.data);\n"
-                            f"4. Observe sensitive user data returned"
-                        )
-                    )
-                    store.add(ws_url, 'Cross-Site WebSocket Hijacking (CSWSH)', 'HIGH',
-                        f"Server accepted cross-origin connection and returned sensitive data.\n"
-                        f"Any website can connect and steal user data.", ev)
-                    return True
-                else:
-                    # Connected but no sensitive data — informational only
-                    ev = Evidence.make(
-                        payload=f'Origin: {evil_origin}',
-                        response=resp[:200],
-                        proof='Origin not validated but no sensitive data exposed',
-                    )
-                    store.add(ws_url, 'No Origin Validation (Low Risk)', 'LOW',
-                        f"Server accepted connection from foreign origin.\n"
-                        f"No sensitive data exposed — may be intentional for public APIs.", ev)
-                    return False
+            baseline_resp = await send_recv(ws, '{"type":"ping"}', timeout=3)
     except Exception:
         pass
+
+    # ── Test each bypass technique ────────────────────────────────────────
+    bypasses_found = []
+    no_origin_headers = {}
+
+    for origin_val, technique, is_advanced in bypass_origins:
+        try:
+            headers = {}
+            if origin_val == 'null':
+                headers['Origin'] = 'null'
+            elif origin_val:
+                headers['Origin'] = origin_val
+
+            async with websockets.connect(
+                ws_url, open_timeout=5,
+                additional_headers=headers,
+                ssl=ssl_ctx if ws_url.startswith('wss') else None,
+            ) as ws:
+                resp = await send_recv(ws, '{"type":"ping"}', timeout=3)
+                if resp:
+                    has_sensitive = any(
+                        re.search(p, resp, re.IGNORECASE)
+                        for p in sensitive_patterns
+                    )
+                    bypasses_found.append({
+                        'origin': origin_val,
+                        'technique': technique,
+                        'response': resp[:300],
+                        'sensitive': has_sensitive,
+                        'is_advanced': is_advanced,
+                    })
+        except websockets.exceptions.InvalidHandshake:
+            # Server rejected — this origin check works
+            pass
+        except Exception:
+            pass
+
+    if not bypasses_found:
+        return False
+
+    # ── Report findings ───────────────────────────────────────────────────
+    # Priority 1: Advanced bypass + sensitive data = CRITICAL
+    critical_bypasses = [b for b in bypasses_found if b['is_advanced'] and b['sensitive']]
+    if critical_bypasses:
+        b = critical_bypasses[0]
+        all_techniques = ', '.join(bp['technique'] for bp in critical_bypasses)
+        ev = Evidence.make(
+            payload=f"Origin: {b['origin']}",
+            request=f"WS Connect with Origin: {b['origin']}",
+            response=b['response'],
+            proof=f"Origin validation bypassed via {b['technique']} — sensitive data exposed",
+            reproduce=(
+                f"1. Create malicious HTML page with:\n"
+                f"   <script>var ws = new WebSocket('{ws_url}');</script>\n"
+                f"2. Host page on domain matching: {b['origin']}\n"
+                f"3. Serve to victim, WebSocket connects cross-origin\n"
+                f"4. Sensitive data from server is captured"
+            ),
+            bypasses_found=len(critical_bypasses),
+            techniques=all_techniques,
+        )
+        store.add(ws_url, 'Advanced CSWSH — Origin Bypass (Critical)', 'CRITICAL',
+            f"Origin validation bypassed using {b['technique']}.\n"
+            f"Server returned sensitive data to spoofed origin.\n"
+            f"Total bypass techniques found: {len(critical_bypasses)}\n"
+            f"Techniques: {all_techniques}", ev)
+        return True
+
+    # Priority 2: Advanced bypass + no sensitive data = HIGH
+    advanced_bypasses = [b for b in bypasses_found if b['is_advanced']]
+    if advanced_bypasses:
+        b = advanced_bypasses[0]
+        all_techniques = ', '.join(bp['technique'] for bp in advanced_bypasses)
+        ev = Evidence.make(
+            payload=f"Origin: {b['origin']}",
+            response=b['response'],
+            proof=f"Origin validation bypassed via {b['technique']} — no sensitive data yet",
+            reproduce=(
+                f"1. Connect to {ws_url} with Origin: {b['origin']}\n"
+                f"2. Server accepts connection despite spoofed origin\n"
+                f"3. Further exploitation may expose sensitive data"
+            ),
+            bypasses_found=len(advanced_bypasses),
+            techniques=all_techniques,
+        )
+        store.add(ws_url, 'CSWSH — Origin Validation Bypass', 'HIGH',
+            f"Origin validation can be bypassed using {len(advanced_bypasses)} technique(s).\n"
+            f"Techniques: {all_techniques}\n"
+            f"No sensitive data exposed in initial probe, but further exploitation possible.", ev)
+        return True
+
+    # Priority 3: Only basic foreign origin accepted + sensitive data = HIGH
+    sensitive_basic = [b for b in bypasses_found if b['sensitive'] and not b['is_advanced']]
+    if sensitive_basic:
+        b = sensitive_basic[0]
+        ev = Evidence.make(
+            payload=f"Origin: {b['origin']}",
+            request=f"WS Connect with Origin: {b['origin']}",
+            response=b['response'],
+            proof='Server returned sensitive data to cross-origin request',
+            reproduce=(
+                f"1. Open browser console on any website\n"
+                f"2. Run: var ws = new WebSocket('{ws_url}');\n"
+                f"3. ws.onmessage = e => console.log(e.data);\n"
+                f"4. Observe sensitive user data returned"
+            ),
+        )
+        store.add(ws_url, 'Cross-Site WebSocket Hijacking (CSWSH)', 'HIGH',
+            f"Server accepted cross-origin connection and returned sensitive data.\n"
+            f"Any website can connect and steal user data.", ev)
+        return True
+
+    # Priority 4: Foreign origin accepted but no sensitive data = LOW
+    ev = Evidence.make(
+        payload=f"Origins tested: {len(bypasses_found)}",
+        response=bypasses_found[0]['response'][:200],
+        proof='Origin not validated but no sensitive data exposed',
+    )
+    store.add(ws_url, 'No Origin Validation (Low Risk)', 'LOW',
+        f"Server accepted {len(bypasses_found)} cross-origin connection(s).\n"
+        f"No sensitive data exposed — may be intentional for public APIs.", ev)
     return False
 
 

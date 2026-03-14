@@ -21,6 +21,7 @@
 | 📄 **Multi-Format Reports** | PDF, HTML, JSON, and SARIF (CI/CD) export |
 | 🤖 **AI Analysis** | Anthropic Claude integration for attack chain analysis |
 | 🕵️ **Live Interceptor** | Capture, search, filter & replay WebSocket traffic |
+| 🧨 **WebSocket Fuzzer** | Auto-detect crashes, DoS, and error leaks with malformed payloads |
 | ⚡ **Fast/Deep Modes** | Quick scans or comprehensive audits |
 | 🖥️ **CLI + Dashboard** | Use the web dashboard or scan from the command line |
 | 🔄 **Concurrent Scanning** | Parallel endpoint testing (3/5/10 threads) |
@@ -48,9 +49,10 @@ ws_pro/
 │   └── findings.py         # Thread-safe findings store, CVSS scoring
 ├── attacks/
 │   ├── injection.py        # SQLi, XSS, CMDi, NoSQL, Prototype Pollution
-│   ├── auth.py             # JWT attacks (7 types), CSWSH, auth bypass, rate limit
+│   ├── auth.py             # JWT attacks (7 types), Advanced CSWSH, auth bypass
 │   ├── network.py          # Encryption, info disclosure, GraphQL, IDOR
 │   ├── timing.py           # Timing-based side channels & user enumeration
+│   ├── fuzzer.py           # WebSocket fuzzer (DoS, boundary values, typings)
 │   └── subprotocol.py      # WebSocket subprotocol negotiation attacks
 ├── dashboard/
 │   ├── app.py              # Flask + Socket.IO server
@@ -315,6 +317,7 @@ WS_CORS_ORIGINS=http://localhost:5000,http://localhost:3000
 | 🌐 **Browser discovery** | Use headless browser to find hidden WS endpoints |
 | 🔑 **JWT attacks** | Test 7 types of JWT vulnerabilities |
 | ⏱ **Timing attacks** | Detect timing-based side channels & user enumeration |
+| 🧨 **Fuzzer** | Send malformed/boundary payloads to detect crashes & leaks |
 | ⚡ **Fast mode** | Skip deep tests for quicker results |
 | 🕵️ **Interceptor** | Capture live WebSocket traffic via proxy |
 | **Concurrent threads** | 3 (Safe) / 5 (Normal) / 10 (Aggressive) |
@@ -342,7 +345,7 @@ WS_CORS_ORIGINS=http://localhost:5000,http://localhost:3000
 - Prototype Pollution
 
 ### Authentication Tests
-- CSWSH (Cross-Site WebSocket Hijacking)
+- Advanced CSWSH (10+ Origin bypass techniques)
 - JWT None Algorithm Attack
 - JWT Algorithm Confusion
 - JWT Token Manipulation
@@ -359,6 +362,13 @@ WS_CORS_ORIGINS=http://localhost:5000,http://localhost:3000
 ### Timing Tests
 - Timing-Based User Enumeration
 - Query Timing Side Channels
+
+### Fuzzer Tests
+- Oversized Payloads (Buffer Overflows)
+- Malformed JSON / Invalid Parsing
+- Special Byte Injections (Null Bytes, Controls)
+- Type Confusion (Arrays vs Dicts vs Strings)
+- Boundary Value Fuzzing
 
 ### Protocol Tests
 - WebSocket Subprotocol Validation

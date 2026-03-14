@@ -430,3 +430,81 @@ class TestCrossModule:
             assert MOCK_URL in f.endpoint or 'ws://' in f.endpoint, (
                 f"Finding '{f.title}' has wrong endpoint: {f.endpoint}"
             )
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#                      ADVANCED CSWSH MODULE TESTS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class TestAdvancedCSWSH:
+    """Test the enhanced Cross-Site WebSocket Hijacking detection."""
+
+    def test_advanced_cswsh_runs_without_error(self):
+        from attacks.auth import test_cswsh
+        run_async(test_cswsh(MOCK_URL))
+        # Verify it ran without crashing
+
+    def test_cswsh_detects_origin_bypass(self):
+        from attacks.auth import test_cswsh
+        run_async(test_cswsh(MOCK_URL))
+        titles = get_titles()
+        cswsh_found = any(
+            'cswsh' in t or 'origin' in t or 'cross-site' in t
+            for t in titles
+        )
+        assert cswsh_found, f"CSWSH not detected: {titles}"
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#                         FUZZER MODULE TESTS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class TestFuzzer:
+    """Test WebSocket fuzzer module."""
+
+    def test_fuzzer_runs_fast_mode(self):
+        from attacks.fuzzer import test_fuzzing
+        results = run_async(test_fuzzing(MOCK_URL, fast_mode=True))
+        assert isinstance(results, list)
+
+    def test_fuzzer_runs_deep_mode(self):
+        from attacks.fuzzer import test_fuzzing
+        results = run_async(test_fuzzing(MOCK_URL, fast_mode=False))
+        assert isinstance(results, list)
+
+    def test_fuzzer_detects_crash(self):
+        """Mock server should crash on null bytes — fuzzer should detect it."""
+        from attacks.fuzzer import test_fuzzing
+        results = run_async(test_fuzzing(MOCK_URL, fast_mode=False))
+        assert 'fuzz_crash' in results or 'fuzz_error_leak' in results, (
+            f"Fuzzer should detect crash or error leak: {results}"
+        )
+
+    def test_fuzzer_payload_lists_exist(self):
+        from attacks.fuzzer import (
+            OVERSIZED_PAYLOADS, MALFORMED_JSON_PAYLOADS,
+            SPECIAL_BYTE_PAYLOADS, TYPE_CONFUSION_PAYLOADS, BOUNDARY_PAYLOADS,
+        )
+        assert len(OVERSIZED_PAYLOADS) >= 3
+        assert len(MALFORMED_JSON_PAYLOADS) >= 5
+        assert len(SPECIAL_BYTE_PAYLOADS) >= 3
+        assert len(TYPE_CONFUSION_PAYLOADS) >= 5
+        assert len(BOUNDARY_PAYLOADS) >= 5
+
+    def test_fuzzer_error_patterns_are_valid_regex(self):
+        import re
+        from attacks.fuzzer import ERROR_LEAK_PATTERNS
+        for pattern, label in ERROR_LEAK_PATTERNS:
+            try:
+                re.compile(pattern)
+            except re.error as e:
+                pytest.fail(f"Invalid regex '{pattern}' ({label}): {e}")
+
+    def test_fuzzer_sensitive_patterns_are_valid_regex(self):
+        import re
+        from attacks.fuzzer import SENSITIVE_LEAK_PATTERNS
+        for pattern, label in SENSITIVE_LEAK_PATTERNS:
+            try:
+                re.compile(pattern)
+            except re.error as e:
+                pytest.fail(f"Invalid regex '{pattern}' ({label}): {e}")

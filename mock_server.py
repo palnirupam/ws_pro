@@ -43,6 +43,26 @@ async def handler(websocket):
         async for message in websocket:
             REQUEST_COUNT[client_id] = REQUEST_COUNT.get(client_id, 0) + 1
 
+            # ── Fuzzer vulnerability: crash on null bytes ─────────────
+            if '\x00' in message:
+                await websocket.send(json.dumps({
+                    'error': 'Internal server error',
+                    'stack_trace': 'Traceback (most recent call last):\n  File "app.py", line 127, in handle_ws\n    data = msg.decode("utf-8")\nUnicodeDecodeError: \'utf-8\' codec can\'t decode byte 0x00',
+                    'internal_path': '/opt/app/server/handlers/ws_handler.py',
+                }))
+                await websocket.close(1011, 'Internal error')
+                return
+
+            # ── Fuzzer vulnerability: crash on oversized payloads ─────
+            if len(message) > 40000:
+                await websocket.send(json.dumps({
+                    'error': 'FATAL ERROR: Out of memory',
+                    'detail': 'Buffer overflow in message handler',
+                    'stack': 'at MessageHandler.process (node_modules/ws/lib/receiver.js:473:22)',
+                }))
+                await websocket.close(1009, 'Message too big')
+                return
+
             try:
                 data = json.loads(message)
             except json.JSONDecodeError:

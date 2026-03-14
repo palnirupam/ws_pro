@@ -247,6 +247,7 @@ function startScan(resume = false) {
       playwright:       document.getElementById('optPlaywright').checked,
       jwt:              document.getElementById('optJWT').checked,
       timing:           document.getElementById('optTiming').checked,
+      fuzzing:          document.getElementById('optFuzzer').checked,
       fast_mode:        document.getElementById('optFastMode').checked,
       concurrent_count: parseInt(document.getElementById('concurrentCount').value),
       intercept:        document.getElementById('optIntercept').checked,
