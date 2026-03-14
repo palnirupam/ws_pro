@@ -423,10 +423,13 @@ If you want to test the tool's scanning capabilities on your Kali Linux machine,
 
 ## ⚠️ Legal Disclaimer
 
-> **This tool is intended for authorized security testing only.**  
-> Only scan targets you own or have explicit written permission to test.  
-> Unauthorized scanning of systems may violate computer crime laws.  
-> The developers are not responsible for any misuse of this tool.
+> **This tool is intended for educational purposes and authorized security testing only.**
+> 
+> The developers and contributors of **WS Tester Pro** assume no liability and are not responsible for any misuse or damage caused by this program. It is the end user's absolute responsibility to obey all applicable local, state, and federal laws.
+> 
+> You may **ONLY** use this tool on systems, networks, and applications that you own, or for which you have explicit, written permission from the owner to conduct security assessments. Unauthorized scanning of systems or exploiting vulnerabilities without consent is illegal and may result in severe civil and criminal penalties.
+> 
+> By using this tool, you agree that you are using it at your own risk and that the creators will not be held accountable for your actions.
 
 ---
 
