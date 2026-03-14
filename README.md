@@ -4,7 +4,7 @@
   <p align="center">
     <img src="https://img.shields.io/badge/python-3.9+-blue?logo=python&logoColor=white" />
     <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-brightgreen" />
-    <img src="https://img.shields.io/badge/license-MIT-orange" />
+    <img src="https://img.shields.io/badge/license-AGPL_v3-orange" />
   </p>
 </p>
 
@@ -435,4 +435,6 @@ If you want to test the tool's scanning capabilities on your Kali Linux machine,
 
 ## 📄 License
 
-MIT License — free for personal and commercial use.
+**GNU AGPL v3 License** — Free for personal, academic, and open-source use.
+
+If you modify or use this software as part of a service (SaaS), you **must** release your modifications under the same AGPL v3 license and make the source code available to your users. See the [LICENSE](LICENSE) file for more details.
