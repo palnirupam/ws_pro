@@ -85,7 +85,7 @@ ws_pro/
 ```powershell
 # 1. Clone or download the project
 cd C:\path\to\your\projects
-git clone <repo-url> ws_pro
+git clone https://github.com/palnirupam/ws_pro.git ws_pro
 cd ws_pro
 
 # 2. (Recommended) Create a virtual environment
@@ -112,7 +112,7 @@ Open your browser → **http://localhost:5000**
 ```bash
 # 1. Clone or download the project
 cd ~/projects
-git clone <repo-url> ws_pro
+git clone https://github.com/palnirupam/ws_pro.git ws_pro
 cd ws_pro
 
 # 2. (Recommended) Create a virtual environment
@@ -141,7 +141,7 @@ sudo apt update && sudo apt install python3 python3-pip python3-venv -y
 
 # 2. Clone or download the project
 cd ~/projects
-git clone <repo-url> ws_pro
+git clone https://github.com/palnirupam/ws_pro.git ws_pro
 cd ws_pro
 
 # 3. (Recommended) Create a virtual environment
