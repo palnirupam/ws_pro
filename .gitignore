@@ -13,5 +13,8 @@ venv.bak/
 
 # Project specific ignores
 logs/
-reports/
 .pytest_cache/
+*.html
+*.pdf
+*.json
+*.sarif
