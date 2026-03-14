@@ -379,6 +379,33 @@ python main.py --target ws://localhost:8765    # Terminal 2
 
 The mock server simulates 13 vulnerability scenarios including SQL injection, XSS, command injection, IDOR, JWT bypass, timing oracle, and more.
 
+### 🐧 Testing on Kali Linux (Local Mock Server)
+
+If you want to test the tool's scanning capabilities on your Kali Linux machine, you can use the built-in vulnerable mock server and the web dashboard:
+
+1. **Start the Mock Server (Target)**
+   Open a terminal, activate your virtual environment, and run:
+   ```bash
+   source venv/bin/activate
+   python3 mock_server.py
+   ```
+   *This starts a vulnerable WebSocket server on `ws://localhost:8765`.*
+
+2. **Start the Dashboard (Scanner)**
+   Open a **new, second terminal window**, activate the environment, and run:
+   ```bash
+   source venv/bin/activate
+   python3 dashboard/app.py
+   ```
+   *This starts the scanner UI on `http://localhost:5000`.*
+
+3. **Run the Scan**
+   - Open your browser and go to `http://localhost:5000`
+   - In the **Target** field, enter: `ws://localhost:8765`
+   - Select **Deep Scan** (uncheck Fast mode) and click **Start Scan**.
+   - Watch the dashboard identify SQLi, XSS, CSWSH and other vulnerabilities in real-time!
+
+
 ---
 
 ## 📋 VS Code Setup
