@@ -80,30 +80,30 @@ def run_cli_scan(args):
             print(f'  Framework: {info["framework"]} | Server: {info["server_header"]}')
 
             tests = [
-                ('Encryption', test_encryption(ep)),
-                ('Injection', run_injection_tests(ep, fast_mode=fast_mode)),
-                ('CSWSH', test_cswsh(ep)),
-                ('Rate Limit', test_rate_limit(ep, fast_mode=fast_mode)),
-                ('Message Size', test_message_size(ep)),
-                ('Info Disclosure', test_info_disclosure(ep)),
-                ('GraphQL', test_graphql(ep)),
-                ('IDOR', test_idor(ep)),
-                ('Subprotocol', test_subprotocol(ep)),
+                ('Encryption', lambda ep=ep: test_encryption(ep)),
+                ('Injection', lambda ep=ep: run_injection_tests(ep, fast_mode=fast_mode)),
+                ('CSWSH', lambda ep=ep: test_cswsh(ep)),
+                ('Rate Limit', lambda ep=ep: test_rate_limit(ep, fast_mode=fast_mode)),
+                ('Message Size', lambda ep=ep: test_message_size(ep)),
+                ('Info Disclosure', lambda ep=ep: test_info_disclosure(ep)),
+                ('GraphQL', lambda ep=ep: test_graphql(ep)),
+                ('IDOR', lambda ep=ep: test_idor(ep)),
+                ('Subprotocol', lambda ep=ep: test_subprotocol(ep)),
             ]
 
             if not fast_mode:
-                tests.append(('Auth Bypass', test_auth_bypass(ep)))
+                tests.append(('Auth Bypass', lambda ep=ep: test_auth_bypass(ep)))
 
             if run_jwt:
-                tests.append(('JWT Attacks', test_jwt_attacks(ep)))
+                tests.append(('JWT Attacks', lambda ep=ep: test_jwt_attacks(ep)))
 
             if run_timing:
-                tests.append(('Timing', test_timing(ep, fast_mode=fast_mode)))
+                tests.append(('Timing', lambda ep=ep: test_timing(ep, fast_mode=fast_mode)))
 
-            for label, coro in tests:
+            for label, coro_factory in tests:
                 try:
                     print(f'  ⏳ {label}...', end=' ', flush=True)
-                    loop.run_until_complete(asyncio.wait_for(coro, timeout=20))
+                    loop.run_until_complete(asyncio.wait_for(coro_factory(), timeout=20))
                     print('✓')
                 except asyncio.TimeoutError:
                     print('⏱ timeout')

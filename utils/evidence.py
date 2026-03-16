@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional
 @dataclass
 class Evidence:
     """Stores proof and reproduction steps for a vulnerability finding."""
-    proof: str = "Evidence pending"
+    proof: str = ''
     payload: Optional[str] = None
     request: Optional[str] = None
     response: Optional[str] = None

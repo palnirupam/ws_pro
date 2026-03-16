@@ -93,7 +93,7 @@ async def discover_endpoints(target_url: str, timeout: int = 8) -> list:
 
 async def test_connection(ws_url: str, timeout: int = 5) -> dict:
     """Check if endpoint actually accepts WS connections"""
-    ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ssl_ctx = ssl.create_default_context()
     ssl_ctx.check_hostname = False
     ssl_ctx.verify_mode = ssl.CERT_NONE
 
@@ -135,7 +135,7 @@ async def test_connection(ws_url: str, timeout: int = 5) -> dict:
 
 async def ws_connect(ws_url: str, headers: dict = None, timeout: int = 5):
     """Create WS connection with proper SSL + headers"""
-    ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ssl_ctx = ssl.create_default_context()
     ssl_ctx.check_hostname = False
     ssl_ctx.verify_mode = ssl.CERT_NONE
 

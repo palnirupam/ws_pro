@@ -214,6 +214,16 @@ def on_connect():
     emit_log('⚠️ SSL certificate verification is disabled for pen testing', 'warning')
 
 
+# ── Finding callback (registered once at module level) ────────────────────────
+def _on_finding_callback(finding):
+    emit_finding(finding.to_dict())
+    sev = finding.severity
+    icon = {'CRITICAL':'🔴','HIGH':'🟠','MEDIUM':'🟡','LOW':'🟢'}.get(sev,'⚪')
+    emit_log(f'{icon} [{sev}] {finding.title}', 'finding')
+
+store.on_finding(_on_finding_callback)
+
+
 @socketio.on('start_scan')
 def on_start_scan(data):
     global scan_running, scan_thread, scan_paused, scan_completed_endpoints
@@ -237,15 +247,6 @@ def on_start_scan(data):
         scan_completed_endpoints.clear()
     else:
         emit_log(f'🔄 Resuming scan — {len(scan_completed_endpoints)} endpoints already done', 'info')
-
-    # Register finding callback
-    def on_finding(finding):
-        emit_finding(finding.to_dict())
-        sev = finding.severity
-        icon = {'CRITICAL':'🔴','HIGH':'🟠','MEDIUM':'🟡','LOW':'🟢'}.get(sev,'⚪')
-        emit_log(f'{icon} [{sev}] {finding.title}', 'finding')
-
-    store.on_finding(on_finding)
 
     scan_running = True
     scan_paused = False
@@ -556,11 +557,11 @@ def _replay_msg(ws_url, message):
                 await conn.send(message)
                 emit_log(f'🔄 Replayed: {message[:80]}', 'info')
                 try:
-                    resp = await asyncio.wait_for(conn.recv(), timeout=3)
+                    resp = await _asyncio.wait_for(conn.recv(), timeout=3)
                     _emit_interceptor_msg('SERVER→CLIENT', resp, '🔄 Replay response')
-                except asyncio.TimeoutError:
+                except _asyncio.TimeoutError:
                     pass
-                except websockets.exceptions.ConnectionClosed:
+                except _ws.exceptions.ConnectionClosed:
                     emit_log('Connection closed during replay', 'warning')
         except ConnectionRefusedError:
             emit_log(f'❌ Connection refused: {ws_url}', 'error')
@@ -637,7 +638,7 @@ def _run_interceptor(ws_url):
                             _emit_interceptor_msg('SERVER→CLIENT', resp)
                         except asyncio.TimeoutError:
                             _emit_interceptor_msg('SERVER→CLIENT', '(no response — timeout)', '⏱')
-                    except websockets.exceptions.ConnectionClosed:
+                    except _ws.exceptions.ConnectionClosed:
                         _emit_interceptor_msg('SERVER→CLIENT', '(connection closed)', '❌')
                         break
                     except Exception as e:
@@ -666,7 +667,11 @@ def _run_interceptor(ws_url):
 # ── Async helper ──────────────────────────────────────────────────────────────
 def _run_async(coro):
     """Run a coroutine safely from a synchronous thread using a fresh event loop."""
-    return asyncio.run(coro)
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 # ── Scan Runner (with concurrency + resume) ───────────────────────────────────
@@ -771,7 +776,13 @@ def run_scan(target_url: str, options: dict):
                     time.sleep(0.5)
                 try:
                     emit_log(f'  ⏳ {label}...', 'info')
-                    _run_async(asyncio.wait_for(coro_factory(), timeout=20))
+                    loop = asyncio.new_event_loop()
+                    try:
+                        loop.run_until_complete(
+                            asyncio.wait_for(coro_factory(), timeout=20)
+                        )
+                    finally:
+                        loop.close()
                 except asyncio.TimeoutError:
                     emit_log(f'  ⏱ Timeout: {label}', 'warning')
                 except Exception as e:
@@ -782,8 +793,15 @@ def run_scan(target_url: str, options: dict):
 
         # Use ThreadPoolExecutor for concurrent scanning
         if concurrent > 1 and total > 1:
+            futures = []
             with ThreadPoolExecutor(max_workers=concurrent) as executor:
-                list(executor.map(run_tests_on_endpoint, enumerate(remaining)))
+                for item in enumerate(remaining):
+                    if not scan_running:
+                        break
+                    futures.append(executor.submit(run_tests_on_endpoint, item))
+                for future in futures:
+                    if not scan_running:
+                        future.cancel()
         else:
             for item in enumerate(remaining):
                 run_tests_on_endpoint(item)

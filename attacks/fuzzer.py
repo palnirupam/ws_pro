@@ -13,8 +13,6 @@ from core.scanner import ws_connect, send_recv
 from core.findings import store
 from utils.evidence import Evidence
 from utils.logger import log
-from utils.evidence import Evidence
-from utils.logger import log
 
 
 # ── Fuzzer Payload Categories ─────────────────────────────────────────────────

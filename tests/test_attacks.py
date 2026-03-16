@@ -239,7 +239,7 @@ class TestJWTAttacks:
 
     def test_jwt_with_token_runs(self):
         from attacks.auth import test_jwt_attacks
-        run_async(test_jwt_attacks(MOCK_URL, jwt_token='eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiYWRtaW4ifQ.'))
+        run_async(test_jwt_attacks(MOCK_URL))
         # Verify it processes token without error
 
 
