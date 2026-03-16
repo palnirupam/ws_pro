@@ -337,15 +337,6 @@ WS_CORS_ORIGINS=http://localhost:5000,http://localhost:3000
 
 ## 🔒 Security Tests Performed
 
-### Injection Tests
-- SQL Injection (MySQL, PostgreSQL, MSSQL, Oracle, SQLite)
-- Cross-Site Scripting (XSS) — stored & reflected
-- OS Command Injection
-- NoSQL Injection
-- Prototype Pollution
-
-### Authentication Tests
-- Advanced CSWSH (10+ Origin bypass techniques)
 - JWT None Algorithm Attack
 - JWT Algorithm Confusion
 - JWT Token Manipulation

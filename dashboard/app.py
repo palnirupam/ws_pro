@@ -688,6 +688,11 @@ def run_scan(target_url: str, options: dict):
     run_ai        = options.get('ai', True)
     run_timing_   = options.get('timing', False)
     run_fuzzer_   = options.get('fuzzing', False)
+    run_race      = options.get('race_condition', True)
+    run_ssrf      = options.get('ssrf', True)
+    run_ssti      = options.get('ssti', True)
+    run_mass      = options.get('mass_assignment', True)
+    run_logic     = options.get('business_logic', True)
     concurrent    = min(int(options.get('concurrent_count', 5)), 10)
 
     try:
@@ -760,12 +765,18 @@ def run_scan(target_url: str, options: dict):
                 ('GraphQL check',         lambda: test_graphql(ep)),
                 ('IDOR check',            lambda: test_idor(ep)),
                 ('Subprotocol check',     lambda: test_subprotocol(ep)),
-                ('Race condition check',  lambda ep=ep: test_race_condition(ep, fast_mode=fast_mode)),
-                ('SSRF check',            lambda ep=ep: test_ssrf(ep, fast_mode=fast_mode)),
-                ('SSTI check',            lambda ep=ep: test_ssti(ep, fast_mode=fast_mode)),
-                ('Mass assignment check', lambda ep=ep: test_mass_assignment(ep, fast_mode=fast_mode)),
-                ('Business logic check',  lambda ep=ep: test_business_logic(ep, fast_mode=fast_mode)),
             ]
+
+            if run_race:
+                tests.append(('Race condition check',  lambda ep=ep: test_race_condition(ep, fast_mode=fast_mode)))
+            if run_ssrf:
+                tests.append(('SSRF check',            lambda ep=ep: test_ssrf(ep, fast_mode=fast_mode)))
+            if run_ssti:
+                tests.append(('SSTI check',            lambda ep=ep: test_ssti(ep, fast_mode=fast_mode)))
+            if run_mass:
+                tests.append(('Mass assignment check', lambda ep=ep: test_mass_assignment(ep, fast_mode=fast_mode)))
+            if run_logic:
+                tests.append(('Business logic check',  lambda ep=ep: test_business_logic(ep, fast_mode=fast_mode)))
 
             if not fast_mode:
                 tests.append(('Auth bypass check', lambda: test_auth_bypass(ep)))
@@ -851,12 +862,22 @@ def run_scan(target_url: str, options: dict):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 if __name__ == '__main__':
-    print("""
+    try:
+        # Windows terminals may default to cp1252; prefer UTF-8 for banner output.
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
+    banner = """
 ╔══════════════════════════════════════╗
 ║     WS Tester Pro — Dashboard        ║
 ║     http://localhost:5000            ║
 ╚══════════════════════════════════════╝
-""")
+"""
+    try:
+        print(banner)
+    except UnicodeEncodeError:
+        print("WS Tester Pro — Dashboard\nhttp://localhost:5000\n")
 
     if cors_origins != '*':
         print(f'  CORS: {cors_origins}')
