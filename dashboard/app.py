@@ -45,6 +45,11 @@ from attacks.network import (test_encryption, test_message_size,
 from attacks.timing import test_timing
 from attacks.subprotocol import test_subprotocol
 from attacks.fuzzer import test_fuzzing
+from attacks.race_condition  import test_race_condition
+from attacks.ssrf            import test_ssrf
+from attacks.ssti            import test_ssti
+from attacks.mass_assignment import test_mass_assignment
+from attacks.business_logic  import test_business_logic
 from reports.generator import generate_html_report
 from utils.logger import log
 
@@ -755,6 +760,11 @@ def run_scan(target_url: str, options: dict):
                 ('GraphQL check',         lambda: test_graphql(ep)),
                 ('IDOR check',            lambda: test_idor(ep)),
                 ('Subprotocol check',     lambda: test_subprotocol(ep)),
+                ('Race condition check',  lambda ep=ep: test_race_condition(ep, fast_mode=fast_mode)),
+                ('SSRF check',            lambda ep=ep: test_ssrf(ep, fast_mode=fast_mode)),
+                ('SSTI check',            lambda ep=ep: test_ssti(ep, fast_mode=fast_mode)),
+                ('Mass assignment check', lambda ep=ep: test_mass_assignment(ep, fast_mode=fast_mode)),
+                ('Business logic check',  lambda ep=ep: test_business_logic(ep, fast_mode=fast_mode)),
             ]
 
             if not fast_mode:

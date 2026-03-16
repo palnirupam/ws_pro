@@ -20,6 +20,11 @@ from attacks.network import (test_encryption, test_message_size,
                               test_info_disclosure, test_graphql, test_idor)
 from attacks.timing import test_timing
 from attacks.subprotocol import test_subprotocol
+from attacks.race_condition  import test_race_condition
+from attacks.ssrf            import test_ssrf
+from attacks.ssti            import test_ssti
+from attacks.mass_assignment import test_mass_assignment
+from attacks.business_logic  import test_business_logic
 from utils.logger import log
 
 
@@ -89,6 +94,11 @@ def run_cli_scan(args):
                 ('GraphQL', lambda ep=ep: test_graphql(ep)),
                 ('IDOR', lambda ep=ep: test_idor(ep)),
                 ('Subprotocol', lambda ep=ep: test_subprotocol(ep)),
+                ('Race Condition', lambda ep=ep: test_race_condition(ep, fast_mode=fast_mode)),
+                ('SSRF', lambda ep=ep: test_ssrf(ep, fast_mode=fast_mode)),
+                ('SSTI', lambda ep=ep: test_ssti(ep, fast_mode=fast_mode)),
+                ('Mass Assignment', lambda ep=ep: test_mass_assignment(ep, fast_mode=fast_mode)),
+                ('Business Logic', lambda ep=ep: test_business_logic(ep, fast_mode=fast_mode)),
             ]
 
             if not fast_mode:
