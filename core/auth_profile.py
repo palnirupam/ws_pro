@@ -5,6 +5,7 @@ Supports username/password login, token, cookie, custom headers.
 import asyncio
 import json
 import re
+import time
 import httpx
 from urllib.parse import urlparse
 from utils.logger import log
@@ -101,9 +102,12 @@ class AuthProfile:
         parsed = urlparse(target_url)
         base_http = f"{'https' if parsed.scheme in ('https','wss') else 'http'}://{parsed.netloc}"
 
-        # Common login endpoints to try
-        login_endpoints = [
-            self.login_url,          # User-provided (if any)
+        # If user provided an explicit login URL, fail fast on that URL only.
+        if self.login_url:
+            login_endpoints = [self.login_url]
+        else:
+            # Common login endpoints to try
+            login_endpoints = [
             f"{base_http}/api/login",
             f"{base_http}/api/auth/login",
             f"{base_http}/api/v1/login",
@@ -113,9 +117,7 @@ class AuthProfile:
             f"{base_http}/api/token",
             f"{base_http}/api/auth/token",
             f"{base_http}/user/login",
-        ]
-        # Remove empty
-        login_endpoints = [e for e in login_endpoints if e]
+            ]
 
         # Login body formats to try
         login_bodies = [
@@ -133,14 +135,20 @@ class AuthProfile:
         ]
 
         ssl_ctx_kwargs = {'verify': False}
+        # Keep login snappy: don't hang the scan/UI on unreachable auth endpoints.
+        timeout = httpx.Timeout(connect=3.0, read=3.0, write=3.0, pool=3.0)
+        deadline_s = 8.0
+        start = time.monotonic()
 
-        async with httpx.AsyncClient(timeout=10, follow_redirects=True,
-                                      **ssl_ctx_kwargs) as client:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True,
+                                     **ssl_ctx_kwargs) as client:
             for endpoint in login_endpoints:
-                if not endpoint:
-                    continue
+                if time.monotonic() - start > deadline_s:
+                    break
                 for body in login_bodies:
                     try:
+                        if time.monotonic() - start > deadline_s:
+                            break
                         # Try JSON login
                         resp = await client.post(
                             endpoint,

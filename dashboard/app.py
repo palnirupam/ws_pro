@@ -415,44 +415,127 @@ def on_check_api_key():
 @socketio.on('test_auth')
 def on_test_auth(data):
     """Test authentication credentials before scan"""
-    url      = data.get('url', '').strip()
+    url       = data.get('url', '').strip()
     auth_data = data.get('auth', {})
+    method    = auth_data.get('method', '').strip()
 
-    if not url or not auth_data.get('method'):
-        emit('auth_test_result', {'success': False, 'message': 'Missing URL or auth method'})
+    # ── Instant validation (no network needed) ────────────────────────
+    if not method:
+        emit('auth_test_result', {
+            'success': False,
+            'message': '⚠️ Select an auth method first'
+        })
         return
 
-    def _test():
-        test_profile = AuthProfile()
-        test_profile.enabled   = True
-        test_profile.method    = auth_data.get('method', '')
-        test_profile.username  = auth_data.get('username', '')
-        test_profile.password  = auth_data.get('password', '')
-        test_profile.token     = auth_data.get('token', '')
-        test_profile.cookie    = auth_data.get('cookie', '')
-        test_profile.login_url = auth_data.get('login_url', '')
+    if method == 'token':
+        token = auth_data.get('token', '').strip()
+        if not token:
+            emit('auth_test_result', {
+                'success': False,
+                'message': '⚠️ Enter a Bearer token'
+            })
+            return
+        masked = token[:12] + '****' if len(token) > 12 else token
+        emit('auth_test_result', {
+            'success': True,
+            'message': f'Token ready: {masked}',
+            'headers': ['Authorization']
+        })
+        return
 
-        loop = asyncio.new_event_loop()
-        try:
-            ok = loop.run_until_complete(test_profile.resolve(url))
-            if ok:
-                headers = test_profile.get_ws_headers()
-                emit('auth_test_result', {
-                    'success': True,
-                    'message': f'Authentication successful! Headers: {list(headers.keys())}',
-                    'headers': list(headers.keys()),
-                })
-            else:
-                emit('auth_test_result', {
+    if method == 'cookie':
+        cookie = auth_data.get('cookie', '').strip()
+        if not cookie:
+            emit('auth_test_result', {
+                'success': False,
+                'message': '⚠️ Enter a session cookie'
+            })
+            return
+        count = len([p for p in cookie.split(';') if '=' in p.strip()])
+        emit('auth_test_result', {
+            'success': True,
+            'message': f'Cookie ready ({count} values)',
+            'headers': ['Cookie']
+        })
+        return
+
+    if method == 'headers':
+        raw = auth_data.get('custom_headers', '').strip()
+        if not raw:
+            emit('auth_test_result', {
+                'success': False,
+                'message': '⚠️ Enter at least one header (Name: Value)'
+            })
+            return
+        header_names = [l.split(':')[0].strip() for l in raw.split('\n') if ':' in l]
+        emit('auth_test_result', {
+            'success': True,
+            'message': f'Headers ready: {", ".join(header_names)}',
+            'headers': header_names
+        })
+        return
+
+    if method == 'login':
+        username  = auth_data.get('username', '').strip()
+        password  = auth_data.get('password', '').strip()
+        login_url = auth_data.get('login_url', '').strip()
+
+        if not username or not password:
+            emit('auth_test_result', {
+                'success': False,
+                'message': '⚠️ Enter username and password'
+            })
+            return
+
+        if not url:
+            emit('auth_test_result', {
+                'success': False,
+                'message': '⚠️ Enter target URL first'
+            })
+            return
+
+        # Login needs network — run in thread
+        # IMPORTANT: capture sid BEFORE thread, use socketio.emit() not emit()
+        sid = request.sid
+
+        def _do_login():
+            test_p = AuthProfile()
+            test_p.enabled   = True
+            test_p.method    = 'login'
+            test_p.username  = username
+            test_p.password  = password
+            test_p.login_url = login_url
+
+            loop = asyncio.new_event_loop()
+            try:
+                ok = loop.run_until_complete(test_p.resolve(url))
+                if ok:
+                    h = list(test_p.get_ws_headers().keys())
+                    socketio.emit('auth_test_result', {
+                        'success': True,
+                        'message': f'Login successful! Got: {", ".join(h)}',
+                        'headers': h,
+                    }, to=sid)
+                else:
+                    socketio.emit('auth_test_result', {
+                        'success': False,
+                        'message': '❌ Login failed — wrong credentials or URL',
+                    }, to=sid)
+            except Exception as e:
+                socketio.emit('auth_test_result', {
                     'success': False,
-                    'message': 'Authentication failed — check credentials',
-                })
-        except Exception as e:
-            emit('auth_test_result', {'success': False, 'message': str(e)})
-        finally:
-            loop.close()
+                    'message': f'❌ Error: {str(e)[:80]}',
+                }, to=sid)
+            finally:
+                loop.close()
 
-    threading.Thread(target=_test, daemon=True).start()
+        threading.Thread(target=_do_login, daemon=True).start()
+        return
+
+    emit('auth_test_result', {
+        'success': False,
+        'message': f'Unknown method: {method}'
+    })
 
 
 @socketio.on('clear_interceptor')

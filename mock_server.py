@@ -7,6 +7,11 @@ import json
 import time
 import base64
 import websockets
+import sys
+import threading
+import hmac as _hmac
+import hashlib as _hashlib
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 
 # Fake JWT (unsigned)
@@ -26,18 +31,116 @@ REQUEST_COUNT = {}
 MAX_REQUESTS = 200  # No real rate limit — simulate missing rate limiting
 
 
+# ── Auth test users ───────────────────────────────────────────────────────────
+MOCK_USERS = {
+    'admin': {'password': 'admin123', 'role': 'admin',  'id': 1},
+    'alice': {'password': 'alice123', 'role': 'user',   'id': 2},
+    'bob':   {'password': 'bob123',   'role': 'user',   'id': 3},
+    'test':  {'password': 'test',     'role': 'tester', 'id': 4},
+}
+
+
+def _make_jwt(username, role):
+    """Create a signed JWT for testing"""
+    h = base64.urlsafe_b64encode(
+        b'{"alg":"HS256","typ":"JWT"}'
+    ).rstrip(b'=').decode()
+    p = base64.urlsafe_b64encode(
+        json.dumps({'user': username, 'role': role,
+                    'exp': 9999999999, 'iat': int(time.time())}).encode()
+    ).rstrip(b'=').decode()
+    sig = base64.urlsafe_b64encode(
+        _hmac.new(b'secret', f'{h}.{p}'.encode(), _hashlib.sha256).digest()
+    ).rstrip(b'=').decode()
+    return f"{h}.{p}.{sig}"
+
+
+class _LoginHandler(BaseHTTPRequestHandler):
+    """HTTP login endpoint — http://localhost:8766/api/login"""
+
+    LOGIN_PATHS = {'/api/login', '/login', '/api/auth/login',
+                   '/api/token', '/api/authenticate', '/api/v1/login'}
+
+    def do_POST(self):
+        if self.path not in self.LOGIN_PATHS:
+            self._send(404, {'error': 'Not found'})
+            return
+
+        length = int(self.headers.get('Content-Length', 0))
+        try:
+            body = json.loads(self.rfile.read(length))
+        except Exception:
+            self._send(400, {'error': 'Invalid JSON'})
+            return
+
+        username = (body.get('username') or body.get('email') or
+                    body.get('user') or '').strip()
+        password = (body.get('password') or body.get('pass') or '').strip()
+
+        if username in MOCK_USERS and MOCK_USERS[username]['password'] == password:
+            user  = MOCK_USERS[username]
+            token = _make_jwt(username, user['role'])
+            self._send(200, {
+                'success':      True,
+                'access_token': token,
+                'token':        token,
+                'user': {
+                    'id':       user['id'],
+                    'username': username,
+                    'role':     user['role'],
+                },
+                'message': f'Welcome, {username}!'
+            })
+        else:
+            self._send(401, {
+                'success': False,
+                'error':   'Invalid credentials'
+            })
+
+    def do_GET(self):
+        if self.path == '/health':
+            self._send(200, {'status': 'ok', 'server': 'VulnServer', 'version': '3.2.1'})
+        else:
+            self._send(404, {'error': 'Not found'})
+
+    def _send(self, code, data):
+        body = json.dumps(data).encode()
+        self.send_response(code)
+        self.send_header('Content-Type',   'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass  # Suppress logs
+
+
+def _start_http(port=8766):
+    server = HTTPServer(('0.0.0.0', port), _LoginHandler)
+    server.serve_forever()
+
 async def handler(websocket):
     client_id = id(websocket)
     REQUEST_COUNT[client_id] = 0
 
     try:
-        # Send welcome with server info (info disclosure)
+        # Check auth header
+        headers    = websocket.request_headers
+        auth_hdr   = headers.get('Authorization', '')
+        cookie_hdr = headers.get('Cookie', '')
+        token      = auth_hdr.replace('Bearer ', '').strip()
+        is_auth    = bool(token and len(token) > 10) or ('session=' in cookie_hdr)
+
         await websocket.send(json.dumps({
-            'type': 'welcome',
-            'message': 'Connected to VulnServer v3.2.1',
-            'server': 'VulnServer',
-            'version': '3.2.1',
-            'debug': True,
+            'type':          'welcome',
+            'message':       'Connected to VulnServer v3.2.1',
+            'server':        'VulnServer',
+            'version':       '3.2.1',
+            'debug':         True,
+            'authenticated': is_auth,
+            'user': {'id': 1, 'username': 'admin',
+                     'role': 'admin', 'session': 'sess_abc123'} if is_auth else None,
         }))
 
         async for message in websocket:
@@ -266,28 +369,47 @@ async def handler(websocket):
 
 
 async def main():
+    # Start HTTP login server
+    threading.Thread(target=_start_http, args=(8766,), daemon=True).start()
+
     async with websockets.serve(handler, "localhost", 8765, max_size=1024*1024):
-        print("""
-╔══════════════════════════════════════════════════╗
-║   🎯 Mock Vulnerable WebSocket Server            ║
-║   ws://localhost:8765                             ║
-║                                                  ║
-║   Simulated vulnerabilities:                     ║
-║   • SQL Injection (error-based)                  ║
-║   • XSS (reflection)                             ║
-║   • Command Injection                            ║
-║   • IDOR (user data access)                      ║
-║   • JWT bypass (accepts alg=none)                ║
-║   • Auth bypass (test=true)                      ║
-║   • Info Disclosure (debug, stack traces)         ║
-║   • GraphQL Introspection                        ║
-║   • Prototype Pollution                          ║
-║   • Timing side-channel (auth)                   ║
-║   • No Rate Limiting                             ║
-║   • No Encryption (ws://)                        ║
-║   • Large message acceptance (1MB)               ║
-╚══════════════════════════════════════════════════╝
-""")
+        try:
+            # Windows terminals may default to cp1252; prefer UTF-8 for banner output.
+            sys.stdout.reconfigure(encoding='utf-8')
+        except Exception:
+            pass
+
+        banner = """
+╔═══════════════════════════════════════════════════════════╗
+║        WS Tester Pro — Vulnerable Lab Server              ║
+╠═══════════════════════════════════════════════════════════╣
+║  WebSocket:   ws://localhost:8765                         ║
+║  HTTP Login:  http://localhost:8766/api/login             ║
+╠═══════════════════════════════════════════════════════════╣
+║  TEST USERS:                                              ║
+║    admin  / admin123   (role: admin)                      ║
+║    alice  / alice123   (role: user)                       ║
+║    bob    / bob123     (role: user)                       ║
+║    test   / test       (role: tester)                     ║
+╠═══════════════════════════════════════════════════════════╣
+║  HOW TO TEST AUTH IN DASHBOARD:                           ║
+║  1. Target: ws://localhost:8765                           ║
+║  2. Auth → Username+Password                             ║
+║     user: admin   pass: admin123                         ║
+║     Login URL: http://localhost:8766/api/login            ║
+║  3. Click Test Auth → should show ✅                      ║
+║  4. Start Scan → authenticated findings!                  ║
+╚═══════════════════════════════════════════════════════════╝
+"""
+        try:
+            print(banner)
+        except UnicodeEncodeError:
+            print(
+                "WS Tester Pro — Vulnerable Lab Server\n"
+                "WebSocket:  ws://localhost:8765\n"
+                "HTTP Login: http://localhost:8766/api/login\n"
+                "Users: admin/admin123, alice/alice123, bob/bob123, test/test\n"
+            )
         await asyncio.Future()
 
 

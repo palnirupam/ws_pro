@@ -208,6 +208,19 @@ You'll see:
 ╚══════════════════════════════════════╝
 ```
 
+### 🔐 Authenticated Scan (Dashboard)
+
+Most real WebSockets are behind login. Use the **🔐 Authentication** card in the sidebar to reuse credentials for **all** WebSocket connections during the scan:
+
+- **Username + Password**: auto-login and extract token/cookies
+- **Bearer token**: attach `Authorization: Bearer ...` to every WS connect
+- **Session cookie**: attach `Cookie: ...` to every WS connect
+- **Custom headers**: attach arbitrary headers (one per line: `Name: Value`)
+
+Use **🧪 Test Auth** to validate credentials before scanning.
+
+> Safety: the UI has a **10s timeout** so "Testing..." can’t get stuck forever.
+
 ### Option B: Command Line
 
 ```bash
@@ -406,6 +419,33 @@ python main.py --target ws://localhost:8765    # Terminal 2
 ```
 
 The mock server simulates 13 vulnerability scenarios including SQL injection, XSS, command injection, IDOR, JWT bypass, timing oracle, and more.
+
+### 🔐 Mock Lab: HTTP Login (for Username+Password auth)
+
+The included `mock_server.py` also starts an **HTTP login server** for testing authenticated scans:
+
+- **WebSocket target**: `ws://localhost:8765`
+- **HTTP login**: `http://localhost:8766/api/login`
+
+**Test users:**
+
+- `admin` / `admin123` (admin)
+- `alice` / `alice123` (user)
+- `bob` / `bob123` (user)
+- `test` / `test` (tester)
+
+**Dashboard auth test:**
+
+1. Start `python mock_server.py`
+2. Start `python dashboard/app.py`
+3. Open `http://localhost:5000`
+4. Target: `ws://localhost:8765`
+5. Auth → Username + Password:
+   - user: `admin`
+   - pass: `admin123`
+   - Login URL: `http://localhost:8766/api/login`
+6. Click **🧪 Test Auth** → should show ✅
+7. Start scan → authenticated connections will be used
 
 ### 🐧 Testing on Kali Linux (Local Mock Server)
 

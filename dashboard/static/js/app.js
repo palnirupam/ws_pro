@@ -211,26 +211,8 @@ function getAuthData() {
   };
 }
 
-function testAuth() {
-  const urlInput = document.getElementById('targetUrl');
-  const url  = urlInput ? urlInput.value.trim() : '';
-  const auth = getAuthData();
-  const st   = document.getElementById('authStatus');
-  const btn  = document.getElementById('testAuthBtn');
-
-  if (!url) { alert('Enter target URL first'); return; }
-  if (!auth.method) { alert('Select an auth method first'); return; }
-
-  if (st) {
-    st.textContent  = '⏳ Testing...';
-    st.style.color  = 'var(--text2)';
-  }
-  if (btn) btn.disabled = true;
-
-  socket.emit('test_auth', { url, auth });
-}
-
 socket.on('auth_test_result', d => {
+  if (window._authTimeout) { clearTimeout(window._authTimeout); window._authTimeout = null; }
   const st  = document.getElementById('authStatus');
   const btn = document.getElementById('testAuthBtn');
   if (btn) btn.disabled = false;
@@ -247,6 +229,33 @@ socket.on('auth_test_result', d => {
     addLog('❌ Auth test failed: ' + (d.message || ''), 'error');
   }
 });
+
+function testAuth() {
+  const url  = (document.getElementById('targetUrl')?.value || '').trim();
+  const auth = getAuthData();
+  const st   = document.getElementById('authStatus');
+  const btn  = document.getElementById('testAuthBtn');
+
+  if (!auth.method) {
+    if (st) { st.textContent = '⚠️ Select an auth method'; st.style.color = 'var(--yellow)'; }
+    return;
+  }
+
+  if (st) { st.textContent = '⏳ Testing...'; st.style.color = 'var(--text2)'; }
+  if (btn) btn.disabled = true;
+
+  // Clear any previous timeout
+  if (window._authTimeout) { clearTimeout(window._authTimeout); }
+
+  // 10 second safety timeout — prevents stuck UI
+  window._authTimeout = setTimeout(() => {
+    if (btn) btn.disabled = false;
+    if (st)  { st.textContent = '❌ No response — check server'; st.style.color = 'var(--red)'; }
+    addLog('⚠️ Auth test timed out', 'warning');
+  }, 10000);
+
+  socket.emit('test_auth', { url, auth });
+}
 
 /* ── Theme Toggle ──────────────────────────────────────────── */
 function toggleTheme() {
