@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional
 @dataclass
 class Evidence:
     """Stores proof and reproduction steps for a vulnerability finding."""
-    proof: str = ''
+    proof: str = 'Evidence pending'
     payload: Optional[str] = None
     request: Optional[str] = None
     response: Optional[str] = None
@@ -26,7 +26,8 @@ class Evidence:
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary representation, omitting empty fields."""
         d = {}
-        if self.proof: d['proof'] = self.proof
+        if self.proof:
+            d['proof'] = self.proof
         if self.payload: d['payload'] = self.payload
         if self.request: d['request'] = self.request
         if self.response: d['response'] = self.response

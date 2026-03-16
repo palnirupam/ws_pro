@@ -44,16 +44,21 @@
 
 ```
 ws_pro/
+├── attacks/
+│   ├── auth.py               # JWT attacks, CSWSH, auth bypass
+│   ├── business_logic.py     # Business logic & workflow abuse tests
+│   ├── fuzzer.py             # WebSocket fuzzer (DoS, boundary values, typings)
+│   ├── injection.py          # SQLi, XSS, CMDi, NoSQL, Prototype Pollution
+│   ├── mass_assignment.py    # Mass-assignment style issues
+│   ├── network.py            # Encryption, info disclosure, GraphQL, IDOR
+│   ├── race_condition.py     # Concurrency / race-condition tests
+│   ├── ssrf.py               # SSRF-style payload tests
+│   ├── ssti.py               # Server-side template injection tests
+│   ├── subprotocol.py        # WebSocket subprotocol negotiation attacks
+│   └── timing.py             # Timing-based side channels & user enumeration
 ├── core/
 │   ├── scanner.py          # Endpoint discovery, fingerprinting, connection helpers
 │   └── findings.py         # Thread-safe findings store, CVSS scoring
-├── attacks/
-│   ├── injection.py        # SQLi, XSS, CMDi, NoSQL, Prototype Pollution
-│   ├── auth.py             # JWT attacks (7 types), Advanced CSWSH, auth bypass
-│   ├── network.py          # Encryption, info disclosure, GraphQL, IDOR
-│   ├── timing.py           # Timing-based side channels & user enumeration
-│   ├── fuzzer.py           # WebSocket fuzzer (DoS, boundary values, typings)
-│   └── subprotocol.py      # WebSocket subprotocol negotiation attacks
 ├── dashboard/
 │   ├── app.py              # Flask + Socket.IO server
 │   ├── templates/
@@ -61,19 +66,29 @@ ws_pro/
 │   └── static/
 │       ├── css/app.css     # Styling (dark/light themes, responsive)
 │       └── js/app.js       # Frontend logic
+├── docs/
+│   ├── dashboard.png        # Screenshot
+│   └── interceptor.png      # Screenshot
+├── logs/                    # Runtime logs (created locally)
 ├── reports/
 │   ├── generator.py        # HTML report generator (browser view)
 │   ├── pdf_generator.py    # OWASP-format PDF report generator
 │   └── sarif_generator.py  # SARIF v2.1.0 for CI/CD integration
+├── tests/
+│   ├── test_attacks.py      # Unit tests (pytest)
+│   ├── test_core.py         # Unit tests (pytest)
+│   └── test_integration.py  # Integration tests (pytest)
 ├── utils/
 │   ├── evidence.py         # Evidence data collector
 │   └── logger.py           # File + console logging
-├── tests/
-│   └── test_core.py        # Unit tests (pytest)
 ├── main.py                 # CLI entry point (argparse)
 ├── mock_server.py          # Vulnerable test server (13 scenarios)
+├── test_ui.py              # UI smoke checks (local)
+├── test_ws.py              # WebSocket connectivity checks (local)
+├── test_results.txt        # Local test output (generated)
 ├── .env.example            # Environment configuration template
 ├── requirements.txt        # Python dependencies
+├── venv/                   # Local virtualenv (recommended; not committed)
 ├── CONTRIBUTING.md         # Contribution guide
 └── README.md               # This file
 ```
