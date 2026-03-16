@@ -154,44 +154,164 @@ async def test_graphql(ws_url: str):
         log.debug(f"GraphQL test error: {e}")
 
 
-async def test_idor(ws_url: str):
-    """Test for IDOR — access other users' resources"""
+async def test_idor(ws_url: str) -> bool:
+    """
+    IDOR — Insecure Direct Object Reference
+    Powerful version: sequential scan, UUID guessing,
+    horizontal + vertical escalation, mass IDOR check
+    """
+    found_any = False
+
+    # ── ID patterns to test ───────────────────────────────────────────────
+    test_ids = [
+        # Sequential IDs
+        '0', '1', '2', '3', '4', '5',
+        '100', '999', '1000',
+        # Common admin IDs
+        '-1', '99999999',
+        # String variants
+        'admin', 'administrator', 'root', 'superuser',
+        # Path traversal style
+        '../../admin', '../1',
+    ]
+
+    # ── Action templates to try ───────────────────────────────────────────
+    action_templates = [
+        lambda id_val: json.dumps({'action': 'get_user',    'user_id': id_val}),
+        lambda id_val: json.dumps({'action': 'get_profile', 'user_id': id_val}),
+        lambda id_val: json.dumps({'action': 'get_account', 'id':      id_val}),
+        lambda id_val: json.dumps({'type':   'fetch',       'resource': f'/user/{id_val}'}),
+        lambda id_val: json.dumps({'type':   'get_profile', 'userId':  id_val}),
+        lambda id_val: json.dumps({'action': 'view',        'id':      id_val}),
+        lambda id_val: json.dumps({'cmd':    'get_user',    'uid':     id_val}),
+        lambda id_val: json.dumps({'op':     'read',        'user':    id_val}),
+        lambda id_val: json.dumps({'method': 'getUser',     'params':  {'id': id_val}}),
+    ]
+
+    # ── Sensitive data patterns that confirm IDOR ─────────────────────────
+    sensitive_patterns = [
+        (r'"email"\s*:\s*"[^"]+@[^"]+"',  'email address'),
+        (r'"password"\s*:',               'password field'),
+        (r'"token"\s*:\s*"[^"]+"',        'auth token'),
+        (r'"phone"\s*:\s*"[\d\+\-\s]+"', 'phone number'),
+        (r'"ssn"\s*:',                    'SSN'),
+        (r'"credit_card"\s*:',            'credit card'),
+        (r'"balance"\s*:\s*[\d\.]+',      'account balance'),
+        (r'"address"\s*:\s*"[^"]+"',      'physical address'),
+        (r'"dob"\s*:',                    'date of birth'),
+        (r'"secret"\s*:',                 'secret field'),
+        (r'"api_key"\s*:',                'API key'),
+        (r'"private_key"\s*:',            'private key'),
+    ]
+
     try:
         async with await ws_connect(ws_url, timeout=5) as ws:
+
+            # ── Step 1: Get baseline (what our "own" data looks like) ─────
             baseline = await send_recv(ws, '{"type":"ping"}', timeout=2)
-            if not baseline:
-                return
+            baseline_str = str(baseline or '')
 
-            found_ids = re.findall(r'"(?:id|user_id|userId|account_id)"\s*:\s*(\d+)', str(baseline))
+            # Extract own user ID from baseline if present
+            own_id_match = re.search(
+                r'"(?:id|user_id|userId|uid)"\s*:\s*["\']?(\d+)["\']?',
+                baseline_str
+            )
+            own_id = own_id_match.group(1) if own_id_match else None
 
-            for test_id in ['1', '2', '0', '999999', '../../etc']:
-                for fmt in [
-                    json.dumps({'action': 'get_user', 'user_id': test_id}),
-                    json.dumps({'action': 'get_account', 'id': test_id}),
-                    json.dumps({'type': 'fetch', 'resource': f'/user/{test_id}'}),
-                    json.dumps({'type': 'get_profile', 'userId': test_id}),
-                ]:
-                    resp = await send_recv(ws, fmt, timeout=2)
+            # ── Step 2: Sequential IDOR scan ─────────────────────────────
+            for test_id in test_ids:
+                # Skip our own ID — that's not IDOR
+                if own_id and str(test_id) == str(own_id):
+                    continue
+
+                for template in action_templates:
+                    try:
+                        msg  = template(test_id)
+                        resp = await send_recv(ws, msg, timeout=2)
+                        if not resp:
+                            continue
+
+                        resp_lower = resp.lower()
+
+                        # Skip error responses
+                        if any(err in resp_lower for err in [
+                            '"error"', 'not found', 'unauthorized',
+                            'forbidden', 'access denied', 'invalid'
+                        ]):
+                            continue
+
+                        # Check for sensitive data in response
+                        for pattern, data_type in sensitive_patterns:
+                            if re.search(pattern, resp, re.IGNORECASE):
+                                ev = Evidence.make(
+                                    payload=msg,
+                                    request=f"Tested ID: {test_id} via action template",
+                                    response=resp[:400],
+                                    proof=f"IDOR confirmed: '{data_type}' returned for resource ID '{test_id}' without authorization check",
+                                    reproduce=(
+                                        f"1. Connect to {ws_url}\n"
+                                        f"2. Send: {msg}\n"
+                                        f"3. Response contains {data_type} of user ID {test_id}\n"
+                                        f"4. No authorization token required — IDOR confirmed"
+                                    )
+                                )
+                                added = store.add(
+                                    ws_url, 'IDOR via WebSocket', 'HIGH',
+                                    f"Insecure Direct Object Reference confirmed.\n"
+                                    f"Accessed resource ID: {test_id}\n"
+                                    f"Sensitive data leaked: {data_type}\n"
+                                    f"No authorization check performed.", ev
+                                )
+                                if added:
+                                    found_any = True
+                                # Don't return — keep scanning other IDs
+                                break
+
+                    except Exception:
+                        continue
+
+            # ── Step 3: Vertical Privilege Escalation via IDOR ────────────
+            # Try to access admin-only resources
+            admin_actions = [
+                json.dumps({'action': 'get_all_users'}),
+                json.dumps({'action': 'admin_panel'}),
+                json.dumps({'action': 'get_users',  'role': 'admin'}),
+                json.dumps({'type':   'admin',       'cmd':  'list_users'}),
+                json.dumps({'action': 'get_config'}),
+                json.dumps({'action': 'system_info'}),
+            ]
+
+            for msg in admin_actions:
+                try:
+                    resp = await send_recv(ws, msg, timeout=2)
                     if not resp:
                         continue
                     resp_lower = resp.lower()
 
-                    # Only flag if sensitive data is returned
-                    if (any(s in resp_lower for s in ['"email":', '"password":', '"token":', '"phone":'])
-                            and 'error' not in resp_lower and 'not found' not in resp_lower):
+                    # Flag if response looks like admin data (list of users etc.)
+                    if (re.search(r'"users"\s*:\s*\[', resp, re.I) or
+                        re.search(r'"total_users"\s*:', resp, re.I) or
+                        re.search(r'"admin_data"\s*:', resp, re.I)):
+
                         ev = Evidence.make(
-                            payload=fmt,
-                            response=resp[:300],
-                            proof=f'Sensitive user data returned for resource ID: {test_id}',
+                            payload=msg,
+                            response=resp[:400],
+                            proof="Vertical IDOR: admin-only resource accessible without admin privileges",
                             reproduce=(
-                                f"1. Connect to {ws_url}\n"
-                                f"2. Send: {fmt}\n"
-                                f"3. Response contains another user's sensitive data"
+                                f"1. Connect to {ws_url} (as regular user)\n"
+                                f"2. Send: {msg}\n"
+                                f"3. Receive admin-level data — privilege escalation via IDOR"
                             )
                         )
-                        store.add(ws_url, 'IDOR via WebSocket', 'HIGH',
-                            f"Access to other users' data without authorization.\n"
-                            f"Resource ID: {test_id}", ev)
-                        return
+                        store.add(ws_url, 'IDOR — Vertical Privilege Escalation', 'CRITICAL',
+                            f"Vertical IDOR: Admin resources accessible without admin role.\n"
+                            f"Action: {msg}", ev)
+                        found_any = True
+                        break
+                except Exception:
+                    continue
+
     except Exception as e:
-        log.debug(f"IDOR test error: {e}")
+        log.debug(f"IDOR test error on {ws_url}: {e}")
+
+    return found_any
