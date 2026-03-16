@@ -15,7 +15,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.scanner import ws_connect, send_recv, test_connection
+from core.scanner import ws_connect, send_recv, test_connection as check_connection
 from core.findings import FindingsStore, store
 from utils.evidence import Evidence
 
@@ -37,7 +37,7 @@ def mock_server():
     loop = asyncio.new_event_loop()
     for _ in range(25):
         try:
-            r = loop.run_until_complete(test_connection(MOCK_URL, timeout=2))
+            r = loop.run_until_complete(check_connection(MOCK_URL, timeout=2))
             if r['alive']:
                 break
         except Exception:

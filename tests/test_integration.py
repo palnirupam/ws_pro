@@ -16,14 +16,19 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.scanner import discover_endpoints, test_connection, fingerprint, ws_connect, send_recv
+from core.scanner import discover_endpoints, test_connection as check_connection, fingerprint, ws_connect, send_recv
 from core.findings import FindingsStore
 from attacks.injection import run_injection_tests
-from attacks.auth import test_cswsh, test_jwt_attacks, test_auth_bypass, test_rate_limit
-from attacks.network import (test_encryption, test_message_size,
-                              test_info_disclosure, test_graphql, test_idor)
-from attacks.timing import test_timing
-from attacks.subprotocol import test_subprotocol
+from attacks.auth import test_cswsh as run_cswsh, test_jwt_attacks as run_jwt_attacks, test_auth_bypass as run_auth_bypass, test_rate_limit as run_rate_limit
+from attacks.network import (
+    test_encryption as run_encryption,
+    test_message_size as run_message_size,
+    test_info_disclosure as run_info_disclosure,
+    test_graphql as run_graphql,
+    test_idor as run_idor,
+)
+from attacks.timing import test_timing as run_timing
+from attacks.subprotocol import test_subprotocol as run_subprotocol
 
 MOCK_URL = 'ws://localhost:8765'
 
@@ -49,7 +54,7 @@ def mock_server():
     ready = False
     for attempt in range(25):
         try:
-            result = loop.run_until_complete(test_connection(MOCK_URL, timeout=2))
+            result = loop.run_until_complete(check_connection(MOCK_URL, timeout=2))
             if result['alive']:
                 ready = True
                 break
@@ -89,11 +94,11 @@ def run_async(coro):
 
 class TestConnection:
     def test_mock_server_alive(self):
-        result = run_async(test_connection(MOCK_URL, timeout=3))
+        result = run_async(check_connection(MOCK_URL, timeout=3))
         assert result['alive'] is True
 
     def test_mock_server_sends_welcome(self):
-        result = run_async(test_connection(MOCK_URL, timeout=3))
+        result = run_async(check_connection(MOCK_URL, timeout=3))
         assert result['alive'] is True
         assert result.get('initial_msg') is not None
         assert 'VulnServer' in result['initial_msg']
@@ -121,7 +126,7 @@ class TestConnection:
         assert run_async(_test()) is True
 
     def test_invalid_endpoint_returns_dead(self):
-        result = run_async(test_connection('ws://localhost:19999', timeout=2))
+        result = run_async(check_connection('ws://localhost:19999', timeout=2))
         assert result['alive'] is False
 
     def test_fingerprint(self):
@@ -176,7 +181,7 @@ class TestFullScanIntegration:
 
     def test_auth_bypass_detected(self):
         """Mock server accepts test=true → Auth bypass should be flagged."""
-        run_async(test_auth_bypass(MOCK_URL))
+        run_async(run_auth_bypass(MOCK_URL))
         titles = [f.title for f in self.store.all()]
         bypass_found = any('bypass' in t.lower() or 'auth' in t.lower() for t in titles)
         # Auth bypass detection depends on mock behavior — may or may not trigger
@@ -185,7 +190,7 @@ class TestFullScanIntegration:
 
     def test_rate_limit_check_runs(self):
         """Rate limit test should run without error."""
-        run_async(test_rate_limit(MOCK_URL, fast_mode=True))
+        run_async(run_rate_limit(MOCK_URL, fast_mode=True))
         # Mock server has no rate limit, should be detected
         titles = [f.title for f in self.store.all()]
         # This is timing-dependent so just verify no crash
@@ -193,7 +198,7 @@ class TestFullScanIntegration:
 
     def test_cswsh_check_runs(self):
         """CSWSH check should run without error."""
-        run_async(test_cswsh(MOCK_URL))
+        run_async(run_cswsh(MOCK_URL))
         # May or may not flag depending on origin validation
         assert True
 
@@ -201,7 +206,7 @@ class TestFullScanIntegration:
 
     def test_encryption_flagged_for_ws(self):
         """ws:// URL should be flagged as unencrypted."""
-        run_async(test_encryption(MOCK_URL))
+        run_async(run_encryption(MOCK_URL))
         titles = [f.title for f in self.store.all()]
         enc_found = any('encrypt' in t.lower() or 'tls' in t.lower() or 'ssl' in t.lower()
                         for t in titles)
@@ -209,7 +214,7 @@ class TestFullScanIntegration:
 
     def test_message_size_check_runs(self):
         """Message size limit test should complete."""
-        run_async(test_message_size(MOCK_URL))
+        run_async(run_message_size(MOCK_URL))
         # Mock server accepts 1MB → should flag
         titles = [f.title for f in self.store.all()]
         size_found = any('size' in t.lower() or 'message' in t.lower() for t in titles)
@@ -217,21 +222,21 @@ class TestFullScanIntegration:
 
     def test_info_disclosure_detected(self):
         """Mock server leaks version/debug info → must be flagged."""
-        run_async(test_info_disclosure(MOCK_URL))
+        run_async(run_info_disclosure(MOCK_URL))
         titles = [f.title for f in self.store.all()]
         info_found = any('disclosure' in t.lower() or 'info' in t.lower() for t in titles)
         assert info_found, f"Info Disclosure not detected. Findings: {titles}"
 
     def test_graphql_introspection_detected(self):
         """Mock server responds to __schema → GraphQL introspection must be flagged."""
-        run_async(test_graphql(MOCK_URL))
+        run_async(run_graphql(MOCK_URL))
         titles = [f.title for f in self.store.all()]
         gql_found = any('graphql' in t.lower() for t in titles)
         assert gql_found, f"GraphQL Introspection not detected. Findings: {titles}"
 
     def test_idor_detected(self):
         """Mock server returns other users' data → IDOR should be flagged."""
-        run_async(test_idor(MOCK_URL))
+        run_async(run_idor(MOCK_URL))
         titles = [f.title for f in self.store.all()]
         idor_found = any('idor' in t.lower() or 'object' in t.lower() for t in titles)
         assert idor_found, f"IDOR not detected. Findings: {titles}"
@@ -240,7 +245,7 @@ class TestFullScanIntegration:
 
     def test_timing_attack_runs(self):
         """Timing test should complete without error (detection is timing-dependent)."""
-        run_async(test_timing(MOCK_URL, fast_mode=True))
+        run_async(run_timing(MOCK_URL, fast_mode=True))
         # Timing-dependent → just verify no crash
         assert True
 
@@ -248,7 +253,7 @@ class TestFullScanIntegration:
 
     def test_subprotocol_check_runs(self):
         """Subprotocol test should complete without error."""
-        run_async(test_subprotocol(MOCK_URL))
+        run_async(run_subprotocol(MOCK_URL))
         # Results depend on server behavior
         assert True
 
@@ -264,11 +269,11 @@ class TestEndToEndFlow:
         store.clear()
 
         # Run the main attack battery
-        run_async(test_encryption(MOCK_URL))
+        run_async(run_encryption(MOCK_URL))
         run_async(run_injection_tests(MOCK_URL, fast_mode=True))
-        run_async(test_info_disclosure(MOCK_URL))
-        run_async(test_graphql(MOCK_URL))
-        run_async(test_message_size(MOCK_URL))
+        run_async(run_info_disclosure(MOCK_URL))
+        run_async(run_graphql(MOCK_URL))
+        run_async(run_message_size(MOCK_URL))
 
         findings = store.all()
         titles = [f.title for f in findings]
@@ -290,7 +295,7 @@ class TestEndToEndFlow:
         store.clear()
 
         run_async(run_injection_tests(MOCK_URL, fast_mode=True))
-        run_async(test_encryption(MOCK_URL))
+        run_async(run_encryption(MOCK_URL))
 
         for f in store.all():
             assert f.evidence is not None, f"Finding '{f.title}' has no evidence"
@@ -303,7 +308,7 @@ class TestEndToEndFlow:
         store.clear()
 
         run_async(run_injection_tests(MOCK_URL, fast_mode=True))
-        run_async(test_encryption(MOCK_URL))
+        run_async(run_encryption(MOCK_URL))
 
         for f in store.all():
             assert f.cvss_score > 0, f"Finding '{f.title}' has CVSS=0"
@@ -315,7 +320,7 @@ class TestEndToEndFlow:
         from core.findings import store
         store.clear()
 
-        run_async(test_encryption(MOCK_URL))
+        run_async(run_encryption(MOCK_URL))
         run_async(run_injection_tests(MOCK_URL, fast_mode=True))
 
         dicts = store.as_dicts()
@@ -342,7 +347,7 @@ class TestEndToEndFlow:
         store.clear()
 
         run_async(run_injection_tests(MOCK_URL, fast_mode=True))
-        run_async(test_encryption(MOCK_URL))
+        run_async(run_encryption(MOCK_URL))
 
         dicts = store.as_dicts()
         sarif = generate_sarif(dicts, MOCK_URL)
@@ -364,10 +369,10 @@ class TestEndToEndFlow:
         from core.findings import store
         store.clear()
 
-        run_async(test_encryption(MOCK_URL))
+        run_async(run_encryption(MOCK_URL))
         count1 = len(store.all())
 
-        run_async(test_encryption(MOCK_URL))
+        run_async(run_encryption(MOCK_URL))
         count2 = len(store.all())
 
         assert count1 == count2, (

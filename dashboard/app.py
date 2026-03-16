@@ -951,7 +951,7 @@ def run_scan(target_url: str, options: dict):
                 tests.append(('Auth bypass check', lambda: test_auth_bypass(ep)))
 
             if run_jwt:
-                tests.append(('JWT attacks', lambda: test_jwt_attacks(ep)))
+                tests.append(('JWT attacks', lambda: test_jwt_attacks(ep, fast_mode=fast_mode)))
 
             if run_timing_:
                 tests.append(('Timing attacks', lambda: test_timing(ep, fast_mode=fast_mode)))

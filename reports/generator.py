@@ -39,6 +39,7 @@ def generate_html_report(findings: list, target: str, ai_analysis: str = '') -> 
         col  = SEVERITY_COLOR[sev]
         cvss = f.get('cvss_score', f.get('cvss', {}).get('score', 'N/A'))
         vec  = f.get('cvss_vector', f.get('cvss', {}).get('vector', ''))
+        conf = html_lib.escape(str(f.get('confidence', '') or ''))
         rem  = html_lib.escape(f.get('remediation', ''))
         desc = html_lib.escape(f.get('description', f.get('detail', ''))).replace('\n','<br>')
         ev   = f.get('evidence', {})
@@ -66,8 +67,12 @@ def generate_html_report(findings: list, target: str, ai_analysis: str = '') -> 
               <tr>
                 <td><b>Severity</b></td>
                 <td><span style="color:{col};font-weight:700">{sev}</span></td>
+                <td><b>Confidence</b></td>
+                <td><b>{conf}</b></td>
+              </tr>
+              <tr>
                 <td><b>CVSS Score</b></td>
-                <td><b style="color:{col}">{cvss}</b></td>
+                <td colspan="3"><b style="color:{col}">{cvss}</b></td>
               </tr>
               <tr>
                 <td><b>CVSS Vector</b></td>

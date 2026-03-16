@@ -69,10 +69,18 @@ WEAK_SECRETS = [
     '', 'null', 'undefined', 'none', 'test123', 'guest',
 ]
 
+# Keep this list *strict* to avoid false positives from generic banners
+# that always include "welcome" or "user" fields even when auth failed.
 AUTH_SUCCESS_SIGNALS = [
-    'authenticated', 'welcome', 'token accepted', 'login success',
-    'authorized', '"status":"ok"', '"success":true', '"auth":true',
-    '"logged_in":true', '"user":', '"role":', '"session":'
+    '"success":true',
+    '"logged_in":true',
+    '"auth":true',
+    '"authenticated":true',
+    'token accepted',
+    'login success',
+    'access granted',
+    'authorized',
+    '"status":"ok"',
 ]
 
 
@@ -407,7 +415,7 @@ async def _test_expired_token(ws_url: str, header: dict, payload: dict) -> bool:
     return False
 
 
-async def test_jwt_attacks(ws_url: str, fast_mode: bool = False) -> list:
+async def test_jwt_attacks(ws_url: str, fast_mode: bool = True) -> list:
     """JWT attack suite — only report confirmed bypasses"""
     results = []
 
@@ -473,7 +481,8 @@ async def test_jwt_attacks(ws_url: str, fast_mode: bool = False) -> list:
     # ── Attack 2: Weak Secret ─────────────────────────────────────────────
     alg = (generic_header or {}).get('alg', 'HS256')
     if alg in ('HS256', 'HS384', 'HS512'):
-        for secret in WEAK_SECRETS:
+        secret_candidates = WEAK_SECRETS[:25] if fast_mode else WEAK_SECRETS
+        for secret in secret_candidates:
             crafted = craft_jwt(generic_header, generic_payload or {}, secret=secret, alg=alg)
             ok, resp = await _try_token(ws_url, crafted, f'secret={secret}')
             if ok:

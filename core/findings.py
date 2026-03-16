@@ -25,6 +25,7 @@ CVSS_DB = {
     'Rate Limit':                 (5.3, 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L'),
     'Information Disclosure':     (5.3, 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N'),
     'No Encryption':              (5.9, 'CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N'),
+    'Unencrypted WebSocket':      (5.9, 'CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N'),
     'Message Size':               (5.3, 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L'),
 }
 
@@ -54,6 +55,7 @@ class Finding:
     severity:     str
     description:  str
     evidence:     Evidence
+    confidence:   str   = ''
     cvss_score:   float = 0.0
     cvss_vector:  str   = ''
     remediation:  str   = ''
@@ -62,10 +64,53 @@ class Finding:
     def __post_init__(self):
         if not self.timestamp:
             self.timestamp = time.strftime('%H:%M:%S')
+        if not self.confidence:
+            self.confidence = self._calc_confidence()
         if not self.cvss_score:
             self.cvss_score, self.cvss_vector = self._calc_cvss()
         if not self.remediation:
             self.remediation = self._get_remediation()
+
+    def _calc_confidence(self) -> str:
+        """
+        Confidence is a *triage label* for real-world use:
+        - CONFIRMED: strong evidence (explicit server acceptance, output, __schema, etc.)
+        - PROBABLE: strong indicator but may need context (e.g. some info disclosure)
+        - NEEDS_MANUAL_VERIFY: heuristic signals (timing, size limits, reflection-only)
+        """
+        t = self.title.lower()
+
+        confirmed_keys = [
+            'sql injection',
+            'os command injection',
+            'command injection',
+            'graphql introspection',
+            'jwt none algorithm',
+            'jwt weak secret',
+            'jwt expired token',
+            'auth bypass',
+        ]
+        if any(k in t for k in confirmed_keys):
+            return 'CONFIRMED'
+
+        if 'information disclosure' in t:
+            return 'PROBABLE'
+
+        needs_manual_keys = [
+            'xss',
+            'prototype pollution',
+            'rate limit',
+            'timing',
+            'message size',
+            'unencrypted websocket',
+            'no message size limit',
+            'subprotocol',
+            'idor',
+        ]
+        if any(k in t for k in needs_manual_keys):
+            return 'NEEDS_MANUAL_VERIFY'
+
+        return 'PROBABLE'
 
     def _calc_cvss(self):
         for key, (score, vector) in CVSS_DB.items():
@@ -88,6 +133,7 @@ class Finding:
             'title':       self.title,
             'severity':    self.severity,
             'description': self.description,
+            'confidence':  self.confidence,
             'cvss_score':  self.cvss_score,
             'cvss_vector': self.cvss_vector,
             'remediation': self.remediation,
@@ -106,7 +152,7 @@ class FindingsStore:
         self._callbacks: list = []
 
     def add(self, endpoint: str, title: str, severity: str,
-            description: str, evidence: Evidence = None) -> bool:
+            description: str, evidence: Evidence = None, confidence: str = '') -> bool:
         """Add finding. Returns True if new, False if duplicate."""
         key = f"{title}|{endpoint}"
         with self._lock:
@@ -119,6 +165,7 @@ class FindingsStore:
                 severity=severity,
                 description=description,
                 evidence=evidence or Evidence(),
+                confidence=confidence,
             )
             self._findings.append(finding)
 

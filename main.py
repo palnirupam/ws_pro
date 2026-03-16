@@ -151,7 +151,7 @@ def run_cli_scan(args):
                 tests.append(('Auth Bypass', lambda ep=ep: test_auth_bypass(ep)))
 
             if run_jwt:
-                tests.append(('JWT Attacks', lambda ep=ep: test_jwt_attacks(ep)))
+                tests.append(('JWT Attacks', lambda ep=ep: test_jwt_attacks(ep, fast_mode=fast_mode)))
 
             if run_timing:
                 tests.append(('Timing', lambda ep=ep: test_timing(ep, fast_mode=fast_mode)))

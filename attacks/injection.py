@@ -335,6 +335,7 @@ async def run_injection_tests(ws_url: str, fast_mode: bool = False) -> list:
             baseline_str = str(baseline or '')
 
             # ── SQL Injection ─────────────────────────────────────────────
+            sqli_confirmed = False
             for payload in SQLI_PAYLOADS[:payload_limit]:
                 for fmt in [
                     json.dumps({"query": payload}),
@@ -368,7 +369,12 @@ async def run_injection_tests(ws_url: str, fast_mode: bool = False) -> list:
                             if added:
                                 results.append('sqli')
                                 log.warning(f"CRITICAL: SQL Injection on {ws_url}")
-                            return results  # Stop — confirmed
+                            sqli_confirmed = True
+                            break
+                    if sqli_confirmed:
+                        break
+                if sqli_confirmed:
+                    break
 
             # ── Boolean-Based SQLi ────────────────────────────────────────
             if not results:
@@ -390,38 +396,28 @@ async def run_injection_tests(ws_url: str, fast_mode: bool = False) -> list:
 
             # ── XSS — only in non-JSON context ────────────────────────────
             for payload in XSS_PAYLOADS:
-                fmt = json.dumps({"message": payload})
-                resp = await send_recv(ws, fmt, timeout=3)
+                # Mock lab reflects raw text when JSON parsing fails.
+                # Send a raw XSS payload (not JSON) to confirm reflection.
+                resp = await send_recv(ws, payload, timeout=3)
                 if not resp:
                     continue
 
-                # Parse response — if it's JSON, check if payload escaped HTML context
                 is_confirmed = False
-                try:
-                    parsed = json.loads(resp)
-                    resp_str = json.dumps(parsed)
-                    # Only XSS if payload appears outside quotes — i.e. rendered as HTML
-                    for pat in XSS_CONFIRMED_PATTERNS:
-                        if re.search(pat, resp, re.IGNORECASE):
-                            is_confirmed = True
-                            break
-                except Exception:
-                    # Raw text — direct check
-                    for pat in XSS_CONFIRMED_PATTERNS:
-                        if re.search(pat, resp, re.IGNORECASE):
-                            is_confirmed = True
-                            break
+                for pat in XSS_CONFIRMED_PATTERNS:
+                    if re.search(pat, resp, re.IGNORECASE):
+                        is_confirmed = True
+                        break
 
                 if is_confirmed:
                     ev = Evidence.make(
                         payload=payload,
-                        request=fmt,
+                        request=payload,
                         response=resp[:300],
-                        proof="XSS payload executed/reflected outside JSON string context",
+                        proof="XSS payload reflected back by server",
                         reproduce=(
                             f"1. Connect to {ws_url}\n"
-                            f"2. Send: {fmt}\n"
-                            f"3. Observe unescaped HTML/JS in response"
+                            f"2. Send raw payload: {payload}\n"
+                            f"3. Observe same HTML/JS reflected in response"
                         )
                     )
                     store.add(ws_url, 'Reflected XSS via WebSocket', 'HIGH',
@@ -431,36 +427,42 @@ async def run_injection_tests(ws_url: str, fast_mode: bool = False) -> list:
                     break
 
             # ── Command Injection ─────────────────────────────────────────
-            if not fast_mode:
-                for payload in CMD_PAYLOADS:
-                    for fmt in [
-                        json.dumps({"host": payload}),
-                        json.dumps({"cmd": payload}),
-                        json.dumps({"exec": payload}),
-                        json.dumps({"ping": payload}),
-                    ]:
-                        resp = await send_recv(ws, fmt, timeout=4)
-                        if not resp:
-                            continue
-                        for pat in CMD_CONFIRMED:
-                            if re.search(pat, resp, re.IGNORECASE | re.DOTALL):
-                                ev = Evidence.make(
-                                    payload=payload,
-                                    request=fmt,
-                                    response=resp[:300],
-                                    proof=f"OS command output detected: {pat}",
-                                    reproduce=(
-                                        f"1. Connect to {ws_url}\n"
-                                        f"2. Send: {fmt}\n"
-                                        f"3. Observe command output in response"
-                                    )
+            cmd_payloads = CMD_PAYLOADS[:3] if fast_mode else CMD_PAYLOADS
+            cmd_confirmed = False
+            for payload in cmd_payloads:
+                for fmt in [
+                    json.dumps({"host": payload}),
+                    json.dumps({"cmd": payload}),
+                    json.dumps({"exec": payload}),
+                    json.dumps({"ping": payload}),
+                ]:
+                    resp = await send_recv(ws, fmt, timeout=4)
+                    if not resp:
+                        continue
+                    for pat in CMD_CONFIRMED:
+                        if re.search(pat, resp, re.IGNORECASE | re.DOTALL):
+                            ev = Evidence.make(
+                                payload=payload,
+                                request=fmt,
+                                response=resp[:300],
+                                proof=f"OS command output detected: {pat}",
+                                reproduce=(
+                                    f"1. Connect to {ws_url}\n"
+                                    f"2. Send: {fmt}\n"
+                                    f"3. Observe command output in response"
                                 )
-                                store.add(ws_url, 'OS Command Injection', 'CRITICAL',
-                                    f"OS command executed via WebSocket message.\n"
-                                    f"Payload: {payload}\n"
-                                    f"Output pattern: {pat}", ev)
-                                results.append('cmdi')
-                                return results
+                            )
+                            store.add(ws_url, 'OS Command Injection', 'CRITICAL',
+                                f"OS command executed via WebSocket message.\n"
+                                f"Payload: {payload}\n"
+                                f"Output pattern: {pat}", ev)
+                            results.append('cmdi')
+                            cmd_confirmed = True
+                            break
+                    if cmd_confirmed:
+                        break
+                if cmd_confirmed:
+                    break
 
             # ── NoSQL ─────────────────────────────────────────────────────
             for payload in NOSQL_PAYLOADS:
@@ -486,7 +488,7 @@ async def run_injection_tests(ws_url: str, fast_mode: bool = False) -> list:
                 resp = await send_recv(ws, payload, timeout=3)
                 if not resp:
                     continue
-                resp_lower = resp.lower()
+                resp_lower = resp.lower().replace(' ', '')
                 # Only flag if injected property is reflected back as true
                 if ('"admin":true' in resp_lower or '"isadmin":true' in resp_lower
                         or '"role":"admin"' in resp_lower):

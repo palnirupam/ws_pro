@@ -120,21 +120,59 @@ async def test_graphql(ws_url: str):
     """Test for GraphQL over WebSocket + introspection"""
     try:
         async with await ws_connect(ws_url, timeout=5) as ws:
-            # Check if it's a GraphQL endpoint
-            init = json.dumps({"type": "connection_init"})
-            resp = await send_recv(ws, init, timeout=3)
-            if not resp:
-                return
-            if '"connection_ack"' not in resp and 'graphql' not in resp.lower():
-                return
+            # Drain welcome / banner message if present.
+            try:
+                await asyncio.wait_for(ws.recv(), timeout=0.5)
+            except Exception:
+                pass
 
-            # Try introspection
+            init = json.dumps({"type": "connection_init"})
+            direct = GRAPHQL_INTROSPECTION
             query = json.dumps({
                 "id": "1",
                 "type": "start",
                 "payload": {"query": "{__schema{types{name}}}"}
             })
-            resp2 = await send_recv(ws, query, timeout=4)
+
+            # Some endpoints (and our mock lab) won't follow graphql-ws handshake strictly.
+            # Try multiple probes and flag if __schema appears in any response.
+            probes = [
+                ("graphql-ws init", init),
+                ("graphql direct query", direct),
+                ("graphql-ws start", query),
+            ]
+
+            for label, payload in probes:
+                await ws.send(payload)
+
+                # Read a few frames since responses can be queued/out-of-order.
+                for _ in range(3):
+                    try:
+                        resp = await asyncio.wait_for(ws.recv(), timeout=1.5)
+                    except Exception:
+                        resp = None
+                    if not resp:
+                        continue
+                    if re.search(GRAPHQL_CONFIRMED, str(resp), re.IGNORECASE):
+                        ev = Evidence.make(
+                            payload=payload,
+                            request=f'Probe: {label}',
+                            response=str(resp)[:400],
+                            proof='GraphQL introspection enabled — __schema exposed',
+                            reproduce=(
+                                f"1. Connect to {ws_url}\n"
+                                f"2. Send: {payload}\n"
+                                f"3. Response contains __schema"
+                            )
+                        )
+                        store.add(ws_url, 'GraphQL Introspection Enabled', 'MEDIUM',
+                            "GraphQL introspection is enabled in production.\n"
+                            "Attacker can enumerate all types, queries, mutations, fields.", ev)
+                        return
+            return
+
+            # (Kept for readability; loop returns on success)
+            resp2 = None
             if resp2 and re.search(GRAPHQL_CONFIRMED, resp2, re.IGNORECASE):
                 ev = Evidence.make(
                     payload=query,
