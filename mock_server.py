@@ -125,22 +125,82 @@ async def handler(websocket):
     REQUEST_COUNT[client_id] = 0
 
     try:
-        # Check auth header
-        headers    = websocket.request_headers
-        auth_hdr   = headers.get('Authorization', '')
-        cookie_hdr = headers.get('Cookie', '')
-        token      = auth_hdr.replace('Bearer ', '').strip()
-        is_auth    = bool(token and len(token) > 10) or ('session=' in cookie_hdr)
+        # ── Parse auth credentials ────────────────────────────────────
+        # websockets v16 passes a ServerConnection object; headers are available via
+        # websocket.request.headers (older versions used websocket.request_headers).
+        try:
+            headers = websocket.request_headers  # type: ignore[attr-defined]
+        except Exception:
+            headers = getattr(getattr(websocket, 'request', None), 'headers', {}) or {}
+        auth_hdr     = headers.get('Authorization', '')
+        cookie_hdr   = headers.get('Cookie', '')
 
+        # Detect custom headers (any non-standard header = user is testing)
+        custom_hdrs  = {k: v for k, v in headers.items()
+                        if k.lower() not in {
+                            'host', 'upgrade', 'connection', 'sec-websocket-key',
+                            'sec-websocket-version', 'sec-websocket-extensions',
+                            'origin', 'user-agent', 'authorization', 'cookie'
+                        }}
+        has_custom   = len(custom_hdrs) > 0
+
+        # Determine auth method and user
+        token        = auth_hdr.replace('Bearer ', '').strip()
+        auth_method  = None
+        auth_user    = None
+        auth_role    = 'guest'
+
+        if token and len(token) > 10:
+            auth_method = 'bearer'
+            # Try to decode JWT payload (base64)
+            try:
+                import base64 as _b64
+                parts = token.split('.')
+                if len(parts) == 3:
+                    pad = parts[1] + '=' * (4 - len(parts[1]) % 4)
+                    import json as _json
+                    payload = _json.loads(_b64.urlsafe_b64decode(pad))
+                    auth_user = payload.get('user', 'token_user')
+                    auth_role = payload.get('role', 'user')
+                else:
+                    auth_user = 'token_user'
+                    auth_role = 'user'
+            except Exception:
+                auth_user = 'token_user'
+                auth_role = 'user'
+
+        elif 'session=' in cookie_hdr:
+            auth_method = 'cookie'
+            auth_user   = 'cookie_user'
+            auth_role   = 'user'
+
+        elif has_custom:
+            auth_method = 'custom_headers'
+            auth_user   = 'custom_header_user'
+            auth_role   = 'user'
+            # Log which custom headers were received
+            print(f"[MockServer] Custom headers received: {list(custom_hdrs.keys())}")
+
+        is_auth = auth_method is not None
+
+        # Send welcome — more data for authenticated users
         await websocket.send(json.dumps({
-            'type':          'welcome',
-            'message':       'Connected to VulnServer v3.2.1',
-            'server':        'VulnServer',
-            'version':       '3.2.1',
-            'debug':         True,
-            'authenticated': is_auth,
-            'user': {'id': 1, 'username': 'admin',
-                     'role': 'admin', 'session': 'sess_abc123'} if is_auth else None,
+            'type':           'welcome',
+            'message':        'Connected to VulnServer v3.2.1',
+            'server':         'VulnServer',
+            'version':        '3.2.1',
+            'debug':          True,
+            'authenticated':  is_auth,
+            'auth_method':    auth_method,
+            'custom_headers_received': list(custom_hdrs.keys()) if has_custom else [],
+            'user': {
+                'id':       1 if auth_role == 'admin' else 2,
+                'username': auth_user,
+                'role':     auth_role,
+                'email':    f'{auth_user}@corp.com',
+                'session':  'sess_abc123',
+                'balance':  9999 if auth_role == 'admin' else 500,
+            } if is_auth else None,
         }))
 
         async for message in websocket:
@@ -335,23 +395,148 @@ async def handler(websocket):
                 }))
                 continue
 
-            # ── Subscribe (no auth check) ─────────────────────────────
+            # ── Subscribe — auth-aware ────────────────────────────────
             if msg_type == 'subscribe':
                 channel = data.get('channel', 'default')
+                if is_auth:
+                    await websocket.send(json.dumps({
+                        'type':    'subscribed',
+                        'channel': channel,
+                        'message': f'Subscribed to {channel}',
+                        'data': {
+                            'user':    auth_user,
+                            'role':    auth_role,
+                            'session': 'sess_abc123',
+                            'email':   f'{auth_user}@corp.com',
+                        },
+                    }))
+                else:
+                    await websocket.send(json.dumps({
+                        'type':    'subscribed',
+                        'channel': 'public_only',
+                        'message': 'Subscribed to public channel (limited data)',
+                        'note':    'Authenticate to access private channels',
+                    }))
+                continue
+
+            # ── My Profile — authenticated only ──────────────────────
+            if action in ('get_my_profile', 'my_profile', 'profile') or msg_type == 'profile':
+                if is_auth:
+                    await websocket.send(json.dumps({
+                        'action': 'profile',
+                        'user': {
+                            'id':       1 if auth_role == 'admin' else 2,
+                            'username': auth_user,
+                            'role':     auth_role,
+                            'email':    f'{auth_user}@corp.com',
+                            'balance':  9999 if auth_role == 'admin' else 500,
+                            'token':    token if token else 'n/a',
+                            'created':  '2024-01-01',
+                        }
+                    }))
+                else:
+                    await websocket.send(json.dumps({
+                        'error':   'Authentication required',
+                        'message': 'Please provide a Bearer token or session cookie',
+                        'hint':    'Use Authorization: Bearer <token> header',
+                    }))
+                continue
+
+            # ── Admin panel — admin role only ─────────────────────────
+            if action in ('admin', 'admin_panel', 'get_all_users', 'list_users') or \
+               msg_type == 'admin':
+                if is_auth and auth_role == 'admin':
+                    await websocket.send(json.dumps({
+                        'action':     'admin_panel',
+                        'authorized': True,
+                        'users': [
+                            {'id': 1, 'username': 'admin',
+                             'email': 'admin@corp.com', 'role': 'admin',
+                             'password': 'admin123'},   # Intentional vuln!
+                            {'id': 2, 'username': 'alice',
+                             'email': 'alice@corp.com', 'role': 'user',
+                             'password': 'alice123'},   # Intentional vuln!
+                            {'id': 3, 'username': 'bob',
+                             'email': 'bob@corp.com',   'role': 'user',
+                             'password': 'bob123'},     # Intentional vuln!
+                        ],
+                        'server_config': {
+                            'db_host':    'db.internal',
+                            'db_pass':    'super_secret_db_pass',
+                            'secret_key': 'super-secret-signing-key-2024',
+                        }
+                    }))
+                elif is_auth and auth_role != 'admin':
+                    await websocket.send(json.dumps({
+                        'error':        'Forbidden',
+                        'message':      f'Admin access required. Your role: {auth_role}',
+                        'your_role':    auth_role,
+                        'required_role':'admin',
+                    }))
+                else:
+                    await websocket.send(json.dumps({
+                        'error':   'Authentication required',
+                        'message': 'Login as admin to access admin panel',
+                    }))
+                continue
+
+            # ── Notification — auth shows personal data ───────────────
+            if action in ('get_notifications', 'notifications') or \
+               msg_type == 'notifications':
+                if is_auth:
+                    await websocket.send(json.dumps({
+                        'notifications': [
+                            {'id': 1, 'message': f'Welcome back, {auth_user}!',
+                             'type': 'welcome'},
+                            {'id': 2, 'message': 'Your account balance: $500',
+                             'type': 'balance', 'amount': 500},
+                            {'id': 3, 'message': 'New login from 192.168.1.1',
+                             'type': 'security', 'ip': '192.168.1.1'},
+                        ],
+                        'user':  auth_user,
+                        'email': f'{auth_user}@corp.com',
+                        'role':  auth_role,
+                    }))
+                else:
+                    await websocket.send(json.dumps({
+                        'notifications': [
+                            {'id': 1, 'message': 'Login to see your notifications',
+                             'type': 'info'},
+                        ],
+                        'authenticated': False,
+                    }))
+                continue
+
+            # ── Custom header acknowledgment ──────────────────────────
+            if msg_type == 'ping' or action == 'ping' or not action:
                 await websocket.send(json.dumps({
-                    'type': 'subscribed',
-                    'channel': channel,
-                    'message': f'Subscribed to {channel}',
-                    'data': {'user': 'admin', 'session': 'abc123'},
+                    'type':           'pong',
+                    'message':        'pong',
+                    'authenticated':  is_auth,
+                    'auth_method':    auth_method,
+                    'custom_headers': list(custom_hdrs.keys()) if has_custom else [],
+                    'request_number': REQUEST_COUNT.get(client_id, 0),
+                    'time':           time.time(),
                 }))
                 continue
 
-            # ── Default: echo with server info ────────────────────────
-            await websocket.send(json.dumps({
-                'response': 'data',
-                'echo': message[:200],
+            # ── Default: echo — shows auth context ────────────────────
+            response = {
+                'response':       'echo',
+                'echo':           message[:200],
                 'request_number': REQUEST_COUNT.get(client_id, 0),
-            }))
+                'authenticated':  is_auth,
+                'auth_method':    auth_method,
+            }
+            # Authenticated users get extra context
+            if is_auth:
+                response['user']           = auth_user
+                response['role']           = auth_role
+                response['custom_headers'] = list(custom_hdrs.keys())
+                response['tip']            = 'You are authenticated! Try: get_my_profile, admin, notifications'
+            else:
+                response['tip'] = 'Not authenticated. Try Bearer Token or Session Cookie auth.'
+            await websocket.send(json.dumps(response))
 
     except websockets.exceptions.ConnectionClosed:
         pass
