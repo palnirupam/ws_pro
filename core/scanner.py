@@ -29,7 +29,17 @@ async def discover_endpoints(target_url: str, timeout: int = 8) -> list:
     base_ws = f"{scheme}://{parsed.netloc}"
 
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, verify=False) as client:
+        # Build auth cookies for HTTP discovery
+        http_cookies = {}
+        try:
+            from core.auth_profile import auth_profile
+            if auth_profile.is_configured():
+                http_cookies = auth_profile._cookies
+        except Exception:
+            pass
+
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True,
+                                     verify=False, cookies=http_cookies) as client:
             r = await client.get(target_url)
             html = r.text
 
@@ -134,17 +144,30 @@ async def test_connection(ws_url: str, timeout: int = 5) -> dict:
 # ── Smart WS Connection helper ────────────────────────────────────────────────
 
 async def ws_connect(ws_url: str, headers: dict = None, timeout: int = 5):
-    """Create WS connection with proper SSL + headers"""
+    """Create WS connection with proper SSL + headers.
+    Automatically includes auth headers if auth profile is configured."""
     ssl_ctx = ssl.create_default_context()
     ssl_ctx.check_hostname = False
     ssl_ctx.verify_mode = ssl.CERT_NONE
+
+    # Merge auth headers with any provided headers
+    final_headers = {}
+    try:
+        from core.auth_profile import auth_profile
+        if auth_profile.is_configured():
+            final_headers.update(auth_profile.get_ws_headers())
+    except Exception:
+        pass
+
+    if headers:
+        final_headers.update(headers)  # Provided headers override auth headers
 
     kwargs = {
         'open_timeout': timeout,
         'ssl': ssl_ctx if ws_url.startswith('wss') else None,
     }
-    if headers:
-        kwargs['additional_headers'] = headers
+    if final_headers:
+        kwargs['additional_headers'] = final_headers
 
     return await websockets.connect(ws_url, **kwargs)
 

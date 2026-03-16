@@ -52,6 +52,7 @@ from attacks.mass_assignment import test_mass_assignment
 from attacks.business_logic  import test_business_logic
 from reports.generator import generate_html_report
 from utils.logger import log
+from core.auth_profile import auth_profile, reset_auth, AuthProfile
 
 app = Flask(__name__, template_folder='templates', static_folder='static')
 app.config['SECRET_KEY'] = os.environ.get('WS_SECRET_KEY', os.urandom(24).hex())
@@ -253,6 +254,32 @@ def on_start_scan(data):
     else:
         emit_log(f'🔄 Resuming scan — {len(scan_completed_endpoints)} endpoints already done', 'info')
 
+    # ── Configure auth profile ────────────────────────────────────────
+    reset_auth()
+    auth_data = options.get('auth', {})
+    auth_method = auth_data.get('method', '')  # 'login', 'token', 'cookie', 'headers', ''
+
+    if auth_method:
+        auth_profile.enabled    = True
+        auth_profile.method     = auth_method
+        auth_profile.username   = auth_data.get('username', '')
+        auth_profile.password   = auth_data.get('password', '')
+        auth_profile.token      = auth_data.get('token', '')
+        auth_profile.cookie     = auth_data.get('cookie', '')
+        auth_profile.login_url  = auth_data.get('login_url', '')
+
+        # Parse custom headers (format: "Header-Name: value\nHeader2: value2")
+        raw_headers = auth_data.get('custom_headers', '')
+        if raw_headers:
+            for line in raw_headers.strip().split('\n'):
+                if ':' in line:
+                    k, v = line.split(':', 1)
+                    auth_profile.custom_headers[k.strip()] = v.strip()
+
+        emit_log(f'🔐 Auth configured: method={auth_method}', 'info')
+    else:
+        emit_log('🔓 No auth — unauthenticated scan', 'info')
+
     scan_running = True
     scan_paused = False
     socketio.emit('status', {'status': 'running'})
@@ -383,6 +410,49 @@ def on_check_api_key():
         emit('api_key_status', {'valid': True, 'message': f'Key loaded ({masked})', 'masked_key': masked})
     else:
         emit('api_key_status', {'valid': False, 'message': 'No API key set'})
+
+
+@socketio.on('test_auth')
+def on_test_auth(data):
+    """Test authentication credentials before scan"""
+    url      = data.get('url', '').strip()
+    auth_data = data.get('auth', {})
+
+    if not url or not auth_data.get('method'):
+        emit('auth_test_result', {'success': False, 'message': 'Missing URL or auth method'})
+        return
+
+    def _test():
+        test_profile = AuthProfile()
+        test_profile.enabled   = True
+        test_profile.method    = auth_data.get('method', '')
+        test_profile.username  = auth_data.get('username', '')
+        test_profile.password  = auth_data.get('password', '')
+        test_profile.token     = auth_data.get('token', '')
+        test_profile.cookie    = auth_data.get('cookie', '')
+        test_profile.login_url = auth_data.get('login_url', '')
+
+        loop = asyncio.new_event_loop()
+        try:
+            ok = loop.run_until_complete(test_profile.resolve(url))
+            if ok:
+                headers = test_profile.get_ws_headers()
+                emit('auth_test_result', {
+                    'success': True,
+                    'message': f'Authentication successful! Headers: {list(headers.keys())}',
+                    'headers': list(headers.keys()),
+                })
+            else:
+                emit('auth_test_result', {
+                    'success': False,
+                    'message': 'Authentication failed — check credentials',
+                })
+        except Exception as e:
+            emit('auth_test_result', {'success': False, 'message': str(e)})
+        finally:
+            loop.close()
+
+    threading.Thread(target=_test, daemon=True).start()
 
 
 @socketio.on('clear_interceptor')
@@ -698,6 +768,22 @@ def run_scan(target_url: str, options: dict):
     try:
         emit_log(f'🚀 Starting scan: {target_url}', 'info')
         emit_log(f'   Concurrent: {concurrent} threads | Mode: {"Fast" if fast_mode else "Deep"}', 'info')
+
+        # ── Resolve auth (do login if needed) ────────────────────────────
+        if auth_profile.is_configured():
+            emit_log('🔐 Resolving authentication...', 'info')
+            loop = asyncio.new_event_loop()
+            try:
+                auth_ok = loop.run_until_complete(auth_profile.resolve(target_url))
+            finally:
+                loop.close()
+
+            if auth_ok:
+                emit_log('✅ Authentication successful', 'success')
+            else:
+                emit_log('⚠️ Authentication failed — continuing without auth', 'warning')
+                auth_profile.enabled = False
+
         emit_progress(5, 'Discovering endpoints...')
 
         # 1. Discover endpoints

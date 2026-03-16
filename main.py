@@ -26,15 +26,25 @@ from attacks.ssti            import test_ssti
 from attacks.mass_assignment import test_mass_assignment
 from attacks.business_logic  import test_business_logic
 from utils.logger import log
+from core.auth_profile import auth_profile, reset_auth
 
 
 def print_banner():
-    print("""
+    banner = """
 ╔══════════════════════════════════════════╗
 ║         🔐 WS Tester Pro — CLI           ║
-║    Advanced WebSocket Security Scanner    ║
+║    Advanced WebSocket Security Scanner   ║
 ╚══════════════════════════════════════════╝
-""")
+"""
+    try:
+        # Force UTF-8 where supported (newer Python)
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+    try:
+        print(banner)
+    except UnicodeEncodeError:
+        print("WS Tester Pro — CLI\nAdvanced WebSocket Security Scanner\n")
 
 
 def run_cli_scan(args):
@@ -53,6 +63,42 @@ def run_cli_scan(args):
         print(f'   JWT: {"On" if run_jwt else "Off"}')
         print(f'   Timing: {"On" if run_timing else "Off"}')
         print()
+
+        # Configure auth
+        reset_auth()
+        if getattr(args, 'token', None):
+            auth_profile.enabled = True
+            auth_profile.method  = 'token'
+            auth_profile.token   = args.token
+            print('🔐 Auth: Bearer token')
+
+        elif getattr(args, 'cookie', None):
+            auth_profile.enabled = True
+            auth_profile.method  = 'cookie'
+            auth_profile.cookie  = args.cookie
+            print('🔐 Auth: Session cookie')
+
+        elif getattr(args, 'username', None) and getattr(args, 'password', None):
+            auth_profile.enabled   = True
+            auth_profile.method    = 'login'
+            auth_profile.username  = args.username
+            auth_profile.password  = args.password
+            auth_profile.login_url = getattr(args, 'login_url', '') or ''
+            print(f'🔐 Auth: Login as {args.username}')
+
+            # Resolve auth before scan
+            login_loop = asyncio.new_event_loop()
+            try:
+                ok = login_loop.run_until_complete(auth_profile.resolve(target))
+                if ok:
+                    print('✅ Login successful')
+                else:
+                    print('⚠️  Login failed — continuing without auth')
+                    auth_profile.enabled = False
+            finally:
+                login_loop.close()
+        else:
+            print('🔓 No auth — unauthenticated scan')
 
         # 1. Discover endpoints
         print('🔍 Discovering endpoints...')
@@ -191,6 +237,12 @@ Examples:
                         help='Print findings as JSON to stdout')
     parser.add_argument('--dashboard', '-d', action='store_true',
                         help='Start the web dashboard instead of CLI scan')
+
+    parser.add_argument('--username', '-u', type=str, help='Username for login')
+    parser.add_argument('--password', '-p', type=str, help='Password for login')
+    parser.add_argument('--token',    type=str, help='Bearer token')
+    parser.add_argument('--cookie',   type=str, help='Session cookie string')
+    parser.add_argument('--login-url',type=str, help='Login endpoint URL (optional)')
 
     args = parser.parse_args()
 

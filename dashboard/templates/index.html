@@ -40,6 +40,55 @@
       <input type="text" id="targetUrl" placeholder="https://target.com" autocomplete="off" spellcheck="false"/>
     </div>
 
+    <!-- ── Auth Profile ─────────────────────────────── -->
+    <div class="card" id="authCard">
+      <h3>🔐 Authentication</h3>
+
+      <select id="authMethod" onchange="onAuthMethodChange()" style="margin-bottom:8px">
+        <option value="">🔓 No Auth (public target)</option>
+        <option value="login">👤 Username + Password</option>
+        <option value="token">🎫 Bearer Token</option>
+        <option value="cookie">🍪 Session Cookie</option>
+        <option value="headers">📋 Custom Headers</option>
+      </select>
+
+      <!-- Login fields -->
+      <div id="authLoginFields" style="display:none">
+        <input type="text"     id="authUsername"  placeholder="Username or email" autocomplete="off"/>
+        <input type="password" id="authPassword"  placeholder="Password"          autocomplete="off"/>
+        <input type="text"     id="authLoginUrl"  placeholder="Login URL (optional, auto-detected)"/>
+      </div>
+
+      <!-- Token field -->
+      <div id="authTokenField" style="display:none">
+        <input type="text" id="authToken" placeholder="eyJhbGci... or your token" autocomplete="off" spellcheck="false"/>
+      </div>
+
+      <!-- Cookie field -->
+      <div id="authCookieField" style="display:none">
+        <input type="text" id="authCookie" placeholder="session=abc123; csrf=xyz" autocomplete="off" spellcheck="false"/>
+      </div>
+
+      <!-- Custom headers field -->
+      <div id="authHeadersField" style="display:none">
+        <textarea id="authCustomHeaders"
+          placeholder="Authorization: Bearer token123&#10;X-API-Key: mykey&#10;X-Custom: value"
+          style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);
+                 padding:7px 10px;border-radius:7px;font-size:.78rem;font-family:monospace;
+                 resize:vertical;min-height:70px;outline:none;margin-bottom:5px"
+        ></textarea>
+      </div>
+
+      <button class="btn btn-secondary"
+              onclick="testAuth()"
+              style="font-size:.75rem;padding:6px 10px;margin-top:4px"
+              id="testAuthBtn">
+        🧪 Test Auth
+      </button>
+      <div id="authStatus" style="font-size:.71rem;text-align:center;min-height:15px;
+                                   margin-top:4px;transition:color .3s">—</div>
+    </div>
+
     <div class="card">
       <h3>🔑 AI API Key</h3>
       <div class="key-wrap">

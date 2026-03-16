@@ -17,6 +17,7 @@
 | Feature | Description |
 |---|---|
 | 🚀 **Auto Scanner** | Discovers WS endpoints & runs 25+ vulnerability tests |
+| 🔐 **Authenticated Scan** | Reuse login (token/cookie/headers) to scan protected WebSockets |
 | 🎯 **Bug Bounty Mode** | One-click copy of HackerOne/Bugcrowd-ready markdown reports |
 | 📄 **Multi-Format Reports** | PDF, HTML, JSON, and SARIF (CI/CD) export |
 | 🤖 **AI Analysis** | Anthropic Claude integration for attack chain analysis |
@@ -222,6 +223,11 @@ python main.py --target https://example.com --output report.sarif --format sarif
 # All options
 python main.py --target https://target.com --timing --no-jwt --output findings.json
 
+# Authenticated scan (CLI)
+python main.py --target https://app.com --username admin --password pass123
+python main.py --target https://app.com --token eyJhbGci...
+python main.py --target https://app.com --cookie "session=abc123; csrf=xyz"
+
 # Start dashboard from CLI
 python main.py --dashboard
 ```
@@ -229,10 +235,15 @@ python main.py --dashboard
 ### Dashboard Workflow
 
 1. Enter a WebSocket URL in the **🎯 Target** field (e.g. `wss://example.com/ws`)
-2. Configure scan options (Fast mode, JWT attacks, Timing, etc.)
-3. Click **▶ Start Scan** (or press `Ctrl+Enter`)
-4. View results in tabs: Findings | Bug Bounty | Live Log | Interceptor | AI Analysis | History
-5. Export reports: **📄 Download PDF** (hover for more formats: HTML, SARIF, JSON)
+2. (Optional) Configure **🔐 Authentication**:
+   - Username + Password (auto-login, token/cookie reuse)
+   - Bearer token
+   - Session cookie
+   - Custom headers
+3. Configure scan options (Fast mode, JWT attacks, Timing, etc.)
+4. Click **▶ Start Scan** (or press `Ctrl+Enter`)
+5. View results in tabs: Findings | Bug Bounty | Live Log | Interceptor | AI Analysis | History
+6. Export reports: **📄 Download PDF** (hover for more formats: HTML, SARIF, JSON)
 
 ### 💡 Example Penetration Testing Session
 
@@ -335,6 +346,7 @@ WS_CORS_ORIGINS=http://localhost:5000,http://localhost:3000
 | 🧨 **Fuzzer** | Send malformed/boundary payloads to detect crashes & leaks |
 | ⚡ **Fast mode** | Skip deep tests for quicker results |
 | 🕵️ **Interceptor** | Capture live WebSocket traffic via proxy |
+| 🔐 **Authentication** | Username+Password login, Bearer token, cookie, or custom headers for authenticated scans |
 | **Concurrent threads** | 3 (Safe) / 5 (Normal) / 10 (Aggressive) |
 
 ---

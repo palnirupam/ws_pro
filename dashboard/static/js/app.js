@@ -165,6 +165,89 @@ function saveApiKey() {
   st.style.color = 'var(--text2)';
 }
 
+// ── Auth Profile UI ──────────────────────────────────────────────
+function onAuthMethodChange() {
+  const method = document.getElementById('authMethod').value;
+
+  // Hide all
+  ['authLoginFields','authTokenField','authCookieField','authHeadersField']
+    .forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.style.display = 'none';
+    });
+
+  // Show relevant
+  const map = {
+    'login':   'authLoginFields',
+    'token':   'authTokenField',
+    'cookie':  'authCookieField',
+    'headers': 'authHeadersField',
+  };
+  if (map[method]) {
+    const target = document.getElementById(map[method]);
+    if (target) target.style.display = 'block';
+  }
+
+  const st = document.getElementById('authStatus');
+  if (st) {
+    st.textContent = method ? `Auth method: ${method}` : '—';
+    st.style.color = method ? 'var(--blue)' : 'var(--text2)';
+  }
+}
+
+function getAuthData() {
+  const methodEl = document.getElementById('authMethod');
+  const method = methodEl ? methodEl.value : '';
+  if (!method) return {};
+
+  return {
+    method,
+    username:       document.getElementById('authUsername')?.value?.trim()  || '',
+    password:       document.getElementById('authPassword')?.value?.trim()  || '',
+    login_url:      document.getElementById('authLoginUrl')?.value?.trim()  || '',
+    token:          document.getElementById('authToken')?.value?.trim()     || '',
+    cookie:         document.getElementById('authCookie')?.value?.trim()    || '',
+    custom_headers: document.getElementById('authCustomHeaders')?.value?.trim() || '',
+  };
+}
+
+function testAuth() {
+  const urlInput = document.getElementById('targetUrl');
+  const url  = urlInput ? urlInput.value.trim() : '';
+  const auth = getAuthData();
+  const st   = document.getElementById('authStatus');
+  const btn  = document.getElementById('testAuthBtn');
+
+  if (!url) { alert('Enter target URL first'); return; }
+  if (!auth.method) { alert('Select an auth method first'); return; }
+
+  if (st) {
+    st.textContent  = '⏳ Testing...';
+    st.style.color  = 'var(--text2)';
+  }
+  if (btn) btn.disabled = true;
+
+  socket.emit('test_auth', { url, auth });
+}
+
+socket.on('auth_test_result', d => {
+  const st  = document.getElementById('authStatus');
+  const btn = document.getElementById('testAuthBtn');
+  if (btn) btn.disabled = false;
+
+  if (!st) return;
+
+  if (d.success) {
+    st.textContent = '✅ ' + (d.message || 'Authentication successful');
+    st.style.color = 'var(--green)';
+    addLog('✅ Auth test passed: ' + (d.message || ''), 'success');
+  } else {
+    st.textContent = '❌ ' + (d.message || 'Authentication failed');
+    st.style.color = 'var(--red)';
+    addLog('❌ Auth test failed: ' + (d.message || ''), 'error');
+  }
+});
+
 /* ── Theme Toggle ──────────────────────────────────────────── */
 function toggleTheme() {
   const body = document.body;
@@ -258,6 +341,7 @@ function startScan(resume = false) {
       intercept:        document.getElementById('optIntercept').checked,
       intercept_url:    document.getElementById('interceptWsUrl').value,
       intercept_port:   parseInt(document.getElementById('interceptPort').value) || 8765,
+      auth:             getAuthData(),
     }
   });
   addLog('🚀 Scan started: ' + url, 'info');
