@@ -35,11 +35,11 @@
 
 ## 📸 Screenshots
 
-![Dashboard View](docs/dashboard.png)
-*The main dashboard for configuring and launching WebSocket security scans.*
+![Dashboard — Scan Results](docs/dashboard.png)
+*Live scan results showing discovered vulnerabilities with severity ratings and CVSS scores.*
 
 ![Interceptor View](docs/interceptor.png)
-*Real-time traffic interceptor highlighting potentially malicious payloads.*
+*Real-time traffic interceptor with search, filter, and export capabilities.*
 
 ## 📁 Project Structure
 
