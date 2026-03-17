@@ -1,10 +1,60 @@
 /* ── State ─────────────────────────────────────────────────── */
 const socket = io({ reconnection: true });
 let findings = [];
-let interceptorMsgs = [];
+let proxyMsgs = [];
+let heldMsgs = new Map(); // id -> last message payload
 const seenKeys = new Set();
 let currentSort = 'time'; // time | severity | endpoint
 let currentFilter = 'all'; // all | CRITICAL | HIGH | MEDIUM | LOW
+
+// Background WebSocket connection to the proxy so "Replay" works even
+// when the user doesn't keep an external client connected.
+let replayWs = null;
+let replayWsPort = null;
+function ensureReplayWs(port) {
+  const p = parseInt(port) || 8080;
+  if (replayWs && replayWs.readyState === WebSocket.OPEN && replayWsPort === p) return;
+  try { if (replayWs) replayWs.close(); } catch(e) {}
+  replayWs = null;
+  replayWsPort = p;
+  try {
+    const url = `ws://localhost:${p}`;
+    replayWs = new WebSocket(url);
+    replayWs.onopen = () => addLog(`🧷 Replay channel connected: ${url}`, 'info');
+    replayWs.onclose = () => { replayWs = null; addLog('🧷 Replay channel disconnected', 'warning'); };
+    replayWs.onerror = () => { /* ignore */ };
+    replayWs.onmessage = () => { /* ignore */ };
+  } catch(e) {
+    replayWs = null;
+  }
+}
+
+function closeReplayWs() {
+  try { if (replayWs) replayWs.close(); } catch(e) {}
+  replayWs = null;
+  replayWsPort = null;
+}
+
+// Report JS errors to server (helps debug "UI not updating").
+window.addEventListener('error', (e) => {
+  try {
+    socket.emit('client_error', {
+      message: e?.message || 'error',
+      source:  (e?.filename || '') + ':' + (e?.lineno || '') + ':' + (e?.colno || ''),
+      stack:   e?.error?.stack || '',
+    });
+  } catch(err) {}
+});
+window.addEventListener('unhandledrejection', (e) => {
+  try {
+    const r = e?.reason;
+    socket.emit('client_error', {
+      message: 'unhandledrejection: ' + (r?.message || String(r)),
+      source:  'promise',
+      stack:   r?.stack || '',
+    });
+  } catch(err) {}
+});
 
 /* ── Export Dropdown Toggle ────────────────────────────────── */
 function toggleExportMenu(e) {
@@ -24,6 +74,7 @@ document.addEventListener('click', (e) => {
 socket.on('connect', () => {
   addLog('✅ Connected to WS Tester Pro', 'success');
   initApiKey();
+  socket.emit('get_proxy_status', {});
 });
 socket.on('disconnect', () => addLog('❌ Disconnected', 'error'));
 socket.on('log',        d => addLog(d.message, d.level || 'info'));
@@ -41,7 +92,76 @@ socket.on('ai_analysis', d => {
   }, 60);
 });
 
-socket.on('interceptor_message', d => addInterceptorMsg(d));
+socket.on('proxy_status', d => {
+  updateProxyStatus(d);
+  const local = `ws://localhost:${d.port || ''}`;
+  if (d.running) addLog(`🧲 Proxy running on ${local}`, 'success');
+  else if ((d.error || '') === 'starting') addLog('🧲 Proxy starting...', 'info');
+  else addLog(`🧲 Proxy stopped${d.error ? ` (${d.error})` : ''}`, d.error ? 'error' : 'info');
+});
+socket.on('proxy_message', d => addProxyMsg(d));
+socket.on('proxy_reset', d => {
+  // Clear only proxy UI state (do not touch scan).
+  proxyMsgs = [];
+  heldMsgs = new Map();
+  const feed = document.getElementById('proxyFeed');
+  if (feed) {
+    feed.innerHTML = '<div class="empty-state"><div class="icon">🧲</div><p>Proxy reset — waiting for new traffic</p></div>';
+  }
+  const list = document.getElementById('heldList');
+  if (list) list.innerHTML = '';
+  const wrap = document.getElementById('heldWrap');
+  if (wrap) wrap.style.display = 'none';
+  ['pTotal','pC2S','pS2C','pFlagged','pHeld'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = '0';
+  });
+  addLog(`🧹 Proxy UI reset${d && d.reason ? ` (${d.reason})` : ''}`, 'info');
+});
+function resolveHeldUI(id, action) {
+  if (!id) return;
+  const m = proxyMsgs.find(x => x.id === id);
+  if (m) m.held = false;
+  heldMsgs.delete(id);
+
+  // Update stats
+  const held = heldMsgs.size;
+  const total = proxyMsgs.length;
+  const c2s = proxyMsgs.filter(x => x.direction === 'CLIENT→SERVER').length;
+  const s2c = proxyMsgs.filter(x => x.direction === 'SERVER→CLIENT').length;
+  const flagged = proxyMsgs.filter(x => x.flagged).length;
+  document.getElementById('pTotal').textContent = total;
+  document.getElementById('pC2S').textContent = c2s;
+  document.getElementById('pS2C').textContent = s2c;
+  document.getElementById('pFlagged').textContent = flagged;
+  document.getElementById('pHeld').textContent = held;
+
+  // Remove HELD badge styling on the feed row if present
+  const row = document.querySelector(`#proxyFeed .p-msg-row[data-id="${id}"]`);
+  if (row) row.classList.remove('held');
+  const hb = row ? row.querySelector('.held-badge') : null;
+  if (hb) hb.remove();
+
+  renderHeldList();
+  addLog(`✅ Held message ${action || 'resolved'}: ${id.slice(0, 8)}…`, 'success');
+}
+
+socket.on('proxy_held_resolved', d => {
+  resolveHeldUI(d && d.id, d && d.action);
+});
+
+socket.on('proxy_action_result', d => {
+  if (!d) return;
+  const id = (d.id || '').toString();
+  if (d.ok) {
+    addLog(`✅ ${d.action} OK ${id ? '(' + id.slice(0, 8) + '…)' : ''}`, 'success');
+    // Fallback: if proxy_held_resolved was missed, still update UI.
+    if (id) resolveHeldUI(id, d.action);
+  } else {
+    addLog(`❌ ${d.action} failed ${id ? '(' + id.slice(0, 8) + '…)' : ''}: ${d.error || 'unknown'}`, 'error');
+    renderHeldList();
+  }
+});
 
 socket.on('scan_complete', () => {
   setStatus('complete');
@@ -277,11 +397,6 @@ function toggleTheme() {
   }
 })();
 
-/* ── Interceptor toggle ─────────────────────────────────────── */
-document.getElementById('optIntercept').addEventListener('change', e => {
-  document.getElementById('interceptorCard').style.display = e.target.checked ? 'block' : 'none';
-});
-
 /* ── Tabs ───────────────────────────────────────────────────── */
 function showTab(name, btn) {
   document.querySelectorAll('.tab-pane').forEach(t => t.classList.remove('active'));
@@ -347,9 +462,6 @@ function startScan(resume = false) {
       business_logic:   document.getElementById('optLogic').checked,
       fast_mode:        document.getElementById('optFastMode').checked,
       concurrent_count: parseInt(document.getElementById('concurrentCount').value),
-      intercept:        document.getElementById('optIntercept').checked,
-      intercept_url:    document.getElementById('interceptWsUrl').value,
-      intercept_port:   parseInt(document.getElementById('interceptPort').value) || 8765,
       auth:             getAuthData(),
     }
   });
@@ -382,7 +494,7 @@ function clearAll() {
   seenKeys.clear();
   resetFindingsUI();
   document.getElementById('log').innerHTML = '';
-  clearInterceptorUI();
+  clearProxyUI();
   document.getElementById('ai-output').textContent = 'AI analysis will appear here after scan completes...';
   setProgress(0, 'Ready');
   updateStats();
@@ -537,59 +649,350 @@ function addLog(msg, level) {
   log.scrollTop = log.scrollHeight;
 }
 
-/* ── Interceptor ────────────────────────────────────────────── */
-function startInterceptor() {
-  const wsUrl = document.getElementById('interceptWsUrl').value.trim();
-  const port  = parseInt(document.getElementById('interceptPort').value) || 8765;
-  if (!wsUrl) { alert('Enter WS URL'); return; }
-  socket.emit('start_interceptor', { ws_url: wsUrl, port });
-  addLog('🕵️ Interceptor started on port ' + port, 'info');
+/* ── Proxy (real WS MITM) ───────────────────────────────────── */
+function startProxy() {
+  const wsUrl = (document.getElementById('proxyTargetUrl')?.value || '').trim();
+  const port  = parseInt(document.getElementById('proxyPort')?.value) || 8080;
+  const interceptMode = !!document.getElementById('proxyInterceptMode')?.checked;
+
+  if (!wsUrl) { addLog('⚠️ Enter a target WS URL first', 'warning'); return; }
+
+  addLog(`🧲 Starting proxy… target=${wsUrl} local_port=${port} intercept=${interceptMode}`, 'info');
+
+  // Update info box immediately (even before server responds).
+  const localEl = document.getElementById('proxyLocalUrl');
+  if (localEl) localEl.textContent = `ws://localhost:${port}`;
+
+  // Simple conflict warning (common mistake: using same port as target).
+  try {
+    const u = new URL(wsUrl.replace(/^ws/, 'http'));
+    const targetPort = u.port ? parseInt(u.port) : (u.protocol === 'https:' ? 443 : 80);
+    if (targetPort === port) {
+      addLog(`⚠️ Local port ${port} matches target port ${targetPort}. Choose a different local port (e.g. 8080).`, 'warning');
+    }
+  } catch(e) {}
+
+  document.getElementById('startProxyBtn').disabled = true;
+  document.getElementById('stopProxyBtn').disabled  = true;
+  const st = document.getElementById('proxyStatusText');
+  if (st) st.textContent = 'Proxy Status: Starting...';
+
+  socket.emit('start_proxy', { ws_url: wsUrl, port, intercept_mode: interceptMode });
+  // If server-side emit is missed, request status shortly after.
+  setTimeout(() => socket.emit('get_proxy_status', {}), 600);
+  setTimeout(() => socket.emit('get_proxy_status', {}), 1600);
 }
 
-function addInterceptorMsg(data) {
-  interceptorMsgs.push(data);
-  const log   = document.getElementById('interceptorLog');
-  const empty = log.querySelector('.empty-state');
+function stopProxy() {
+  addLog('🧲 Stopping proxy…', 'info');
+  socket.emit('stop_proxy', {});
+  setTimeout(() => socket.emit('get_proxy_status', {}), 600);
+  setTimeout(() => socket.emit('get_proxy_status', {}), 1600);
+}
+
+function quickProxyTest() {
+  const port = parseInt(document.getElementById('proxyPort')?.value) || 8080;
+  const url = `ws://localhost:${port}`;
+
+  addLog(`🧪 Quick Test: connecting to ${url}`, 'info');
+
+  let opened = false;
+  const ws = new WebSocket(url);
+
+  const to = setTimeout(() => {
+    try { ws.close(); } catch(e) {}
+    if (!opened) addLog('❌ Quick Test failed: could not open WebSocket to proxy (is it running?)', 'error');
+    else addLog('⚠️ Quick Test: no response (target may not reply to ping)', 'warning');
+  }, 4000);
+
+  ws.onopen = () => {
+    opened = true;
+    addLog('🧪 Quick Test: sending {"type":"ping"}', 'info');
+    try { ws.send('{"type":"ping"}'); } catch(e) {}
+  };
+  ws.onmessage = (e) => {
+    clearTimeout(to);
+    addLog('✅ Quick Test got response (see interceptor feed).', 'success');
+    try { ws.close(); } catch(err) {}
+  };
+  ws.onerror = () => {
+    clearTimeout(to);
+    addLog('❌ Quick Test WebSocket error (check proxy status / port).', 'error');
+  };
+}
+
+function updateProxyStatus(d) {
+  const running = !!d.running;
+  const port = d.port || parseInt(document.getElementById('proxyPort')?.value) || 8080;
+  const dot = document.getElementById('proxyDot');
+  const st  = document.getElementById('proxyStatusText');
+  const localUrl = `ws://localhost:${port}`;
+  const localEl = document.getElementById('proxyLocalUrl');
+  const im = document.getElementById('proxyInterceptMode');
+
+  if (localEl) localEl.textContent = localUrl;
+  if (dot) dot.className = 'p-dot ' + (running ? 'running' : 'stopped');
+
+  // Keep UI in sync with server-side intercept mode.
+  if (im && typeof d.intercept_mode === 'boolean') {
+    im.checked = d.intercept_mode;
+  }
+
+  if (st) {
+    if (running) st.textContent = `Proxy Status: Running on ${localUrl}`;
+    else if ((d.error || '') === 'starting') st.textContent = 'Proxy Status: Starting...';
+    else if ((d.error || '') === 'stopping') st.textContent = 'Proxy Status: Stopping...';
+    else st.textContent = 'Proxy Status: Stopped' + (d.error ? ` (${d.error})` : '');
+  }
+
+  const startBtn = document.getElementById('startProxyBtn');
+  const stopBtn  = document.getElementById('stopProxyBtn');
+  if (startBtn) startBtn.disabled = running;
+  if (stopBtn)  stopBtn.disabled  = !running;
+
+  // Keep replay channel alive while proxy is running.
+  if (running) ensureReplayWs(port);
+  else closeReplayWs();
+
+  // Update empty-state hint in the feed.
+  const feed = document.getElementById('proxyFeed');
+  if (feed) {
+    const empty = feed.querySelector('.empty-state');
+    if (empty) {
+      empty.innerHTML = running
+        ? '<div class="icon">🧲</div><p>Proxy is running — connect a client to <b>' + localUrl + '</b> to capture traffic</p>'
+        : '<div class="icon">🧲</div><p>Start the proxy to see live WebSocket traffic</p>';
+    }
+  }
+}
+
+function _safePrettyJSON(s) {
+  try {
+    const o = JSON.parse(s);
+    return JSON.stringify(o, null, 2);
+  } catch(e) { return null; }
+}
+
+function _truncateText(s, n=200) {
+  if (!s) return '';
+  if (s.length <= n) return s;
+  return s.slice(0, n) + '…';
+}
+
+function addProxyMsg(data) {
+  proxyMsgs.push(data);
+  if (data.held) heldMsgs.set(data.id, data);
+  else heldMsgs.delete(data.id);
+
+  // Update stats
+  const total = proxyMsgs.length;
+  const c2s = proxyMsgs.filter(m => m.direction === 'CLIENT→SERVER').length;
+  const s2c = proxyMsgs.filter(m => m.direction === 'SERVER→CLIENT').length;
+  const flagged = proxyMsgs.filter(m => m.flagged).length;
+  const held = heldMsgs.size;
+  document.getElementById('pTotal').textContent = total;
+  document.getElementById('pC2S').textContent = c2s;
+  document.getElementById('pS2C').textContent = s2c;
+  document.getElementById('pFlagged').textContent = flagged;
+  document.getElementById('pHeld').textContent = held;
+
+  // Feed row
+  const feed = document.getElementById('proxyFeed');
+  const empty = feed.querySelector('.empty-state');
   if (empty) empty.remove();
 
   const row = document.createElement('div');
-  row.className = 'msg-row' + (data.flagged ? ' flagged' : '');
+  row.className = 'p-msg-row' + (data.flagged ? ' flagged' : '') + (data.held ? ' held' : '');
+  row.setAttribute('data-id', data.id || '');
   row.setAttribute('data-dir', (data.direction || '').includes('CLIENT') ? 'client' : 'server');
 
-  const t   = document.createElement('span'); t.className = 'msg-time';    t.textContent = data.time || '';
-  const dir = document.createElement('span'); dir.className = 'msg-dir ' + (data.direction === 'CLIENT→SERVER' ? 'c' : 's');
-  dir.textContent = data.direction || '';
-  const msg = document.createElement('span'); msg.className = 'msg-content';
+  const t = document.createElement('span'); t.className = 'p-msg-time'; t.textContent = data.time || '';
 
-  const msgText = (data.message || '').slice(0, 300);
-  try {
-    JSON.parse(msgText);
-    msg.classList.add('json-msg');
-  } catch(e) {}
-  msg.textContent = msgText;
+  const dir = document.createElement('span');
+  dir.className = 'p-msg-dir ' + (data.direction === 'CLIENT→SERVER' ? 'c' : 's');
+  dir.textContent = data.direction === 'CLIENT→SERVER' ? 'CLIENT→SERVER' : 'SERVER→CLIENT';
 
-  row.append(t, dir, msg);
-  if (data.flagged) {
-    const f = document.createElement('span'); f.className = 'flag-tag';
-    f.textContent = '⚠️ FLAGGED';
-    if (data.flags && data.flags.length) {
-      f.title = data.flags.join(', ');
-    }
-    row.appendChild(f);
+  const size = document.createElement('span'); size.className = 'size-badge';
+  size.textContent = `${data.size || 0}B`;
+
+  const body = document.createElement('div'); body.className = 'p-msg-body';
+  const msgRaw = (data.message || '');
+  const pretty = (data.message_type === 'json') ? _safePrettyJSON(msgRaw) : null;
+  const msgToShow = pretty || msgRaw;
+
+  const pre = document.createElement('pre');
+  pre.className = 'p-msg-content' + ((data.message_type === 'json' || pretty) ? ' json' : '');
+  pre.textContent = _truncateText(msgToShow, 400);
+
+  const moreBtn = document.createElement('button');
+  moreBtn.className = 'mini-link';
+  moreBtn.textContent = (msgToShow.length > 400) ? 'Show more' : '';
+  if (msgToShow.length <= 400) moreBtn.style.display = 'none';
+  let expanded = false;
+  moreBtn.onclick = () => {
+    expanded = !expanded;
+    pre.textContent = expanded ? msgToShow : _truncateText(msgToShow, 400);
+    moreBtn.textContent = expanded ? 'Show less' : 'Show more';
+  };
+
+  body.append(pre, moreBtn);
+
+  const badges = document.createElement('div'); badges.className = 'p-badges';
+  if (data.held) {
+    const hb = document.createElement('span'); hb.className = 'held-badge'; hb.textContent = 'HELD';
+    badges.appendChild(hb);
   }
-  log.appendChild(row);
-  log.scrollTop = log.scrollHeight;
-  document.getElementById('msgCount').textContent  = interceptorMsgs.length;
-  document.getElementById('flagCount').textContent = interceptorMsgs.filter(m => m.flagged).length;
+  if (data.flags && data.flags.length) {
+    data.flags.forEach(fl => {
+      const b = document.createElement('span'); b.className = 'flag-badge'; b.textContent = fl;
+      badges.appendChild(b);
+    });
+  }
+
+  const actions = document.createElement('div'); actions.className = 'p-actions';
+  const replay = document.createElement('button'); replay.className = 'btn btn-secondary btn-mini';
+  replay.textContent = '🔄 Replay';
+  // Don't offer replay for synthetic/system error rows (0B "Target Unreachable", etc).
+  const isSystem = (data.direction || '') === 'SYSTEM';
+  const isEmpty = !((data.message || '').toString().trim());
+  if (isSystem || isEmpty) {
+    replay.disabled = true;
+    replay.title = 'Replay unavailable for system/error rows';
+  } else {
+    replay.onclick = () => replayMessage(data.id);
+  }
+  actions.appendChild(replay);
+
+  row.append(t, dir, size, body, badges, actions);
+  feed.appendChild(row);
+  feed.scrollTop = feed.scrollHeight;
+
+  // Held list (only if intercept mode is enabled in UI)
+  renderHeldList();
 }
 
-function clearInterceptorUI() {
-  interceptorMsgs = [];
-  socket.emit('clear_interceptor');
-  document.getElementById('interceptorLog').innerHTML =
-    '<div class="empty-state"><div class="icon">🕵️</div><p>Enable interceptor and start proxy</p></div>';
-  document.getElementById('msgCount').textContent  = 0;
-  document.getElementById('flagCount').textContent = 0;
+function renderHeldList() {
+  const wrap = document.getElementById('heldWrap');
+  const list = document.getElementById('heldList');
+  const enabled = !!document.getElementById('proxyInterceptMode')?.checked;
+  const held = Array.from(heldMsgs.values());
+
+  if (!enabled) {
+    wrap.style.display = 'none';
+    return;
+  }
+  wrap.style.display = 'block';
+  list.innerHTML = '';
+  if (!held.length) {
+    list.innerHTML = '<div class="empty-state" style="padding:22px 10px"><div class="icon">⏸</div><p>No held messages</p></div>';
+    return;
+  }
+
+  held.slice(-50).reverse().forEach(m => {
+    const card = document.createElement('div');
+    card.className = 'held-card';
+    const hdr = document.createElement('div');
+    hdr.className = 'held-hdr';
+    hdr.innerHTML = `<span class="held-meta">${m.time || ''} · ${m.direction || ''} · ${m.size || 0}B</span>`;
+
+    const ta = document.createElement('textarea');
+    ta.className = 'held-edit';
+    const pretty = (m.message_type === 'json') ? _safePrettyJSON(m.message || '') : null;
+    ta.value = pretty || (m.message || '');
+    ta.setAttribute('data-id', m.id || '');
+
+    const btns = document.createElement('div');
+    btns.className = 'held-btns';
+    const fwd = document.createElement('button'); fwd.className = 'btn btn-secondary btn-mini'; fwd.textContent = 'Forward';
+    fwd.onclick = () => {
+      fwd.disabled = true; mod.disabled = true; drop.disabled = true;
+      forwardHeld(m.id, null);
+    };
+    const mod = document.createElement('button'); mod.className = 'btn btn-secondary btn-mini'; mod.textContent = 'Modify & Forward';
+    mod.onclick = () => {
+      fwd.disabled = true; mod.disabled = true; drop.disabled = true;
+      forwardHeld(m.id, ta.value);
+    };
+    const drop = document.createElement('button'); drop.className = 'btn btn-danger btn-mini'; drop.textContent = 'Drop';
+    drop.onclick = () => {
+      fwd.disabled = true; mod.disabled = true; drop.disabled = true;
+      dropHeld(m.id);
+    };
+    btns.append(fwd, mod, drop);
+
+    card.append(hdr, ta, btns);
+    list.appendChild(card);
+  });
+}
+
+function forwardHeld(messageId, modifiedContent) {
+  // Optimistic UI update: remove immediately to avoid "stuck" UX.
+  resolveHeldUI(messageId, 'forward');
+  socket.emit('forward_message', { message_id: messageId, modified_content: modifiedContent });
+}
+
+function dropHeld(messageId) {
+  resolveHeldUI(messageId, 'drop');
+  socket.emit('drop_message', { message_id: messageId });
+}
+
+function replayMessage(messageId) {
+  const m = proxyMsgs.find(x => x.id === messageId);
+  if (!m) { addLog('⚠️ Message not found for replay', 'warning'); return; }
+  const raw = (m.message || '').toString();
+  const msg = raw.trim();
+  if (!msg) { addLog('⚠️ Empty message — nothing to replay', 'warning'); return; }
+  if (m.direction === 'SERVER→CLIENT') {
+    // Practical replay: send payload back to the target (C→S).
+    addLog('ℹ️ Replay sends payload to target (C→S)', 'info');
+  }
+  const port = parseInt(document.getElementById('proxyPort')?.value) || 8080;
+  ensureReplayWs(port);
+  if (replayWs && replayWs.readyState === WebSocket.OPEN) {
+    try {
+      replayWs.send(msg);
+      addLog('✅ Replay sent via proxy (replay channel)', 'success');
+      return;
+    } catch(e) {}
+  }
+
+  // Fallback: ask backend to replay via any active session (if present).
+  socket.emit('replay_via_proxy', { message: msg, direction: 'client_to_server' }, (res) => {
+    if (res && res.ok) addLog('✅ Replay sent via proxy', 'success');
+    else addLog(`❌ Replay failed: ${(res && res.error) ? res.error : 'unknown_error'}`, 'error');
+  });
+  addLog('🔄 Replaying via proxy...', 'info');
+}
+
+function clearProxyUI() {
+  proxyMsgs = [];
+  heldMsgs = new Map();
+  document.getElementById('proxyFeed').innerHTML =
+    '<div class="empty-state"><div class="icon">🧲</div><p>Start the proxy to see live WebSocket traffic</p></div>';
+  document.getElementById('heldList').innerHTML = '';
+  document.getElementById('heldWrap').style.display = 'none';
+  ['pTotal','pC2S','pS2C','pFlagged','pHeld'].forEach(id => document.getElementById(id).textContent = '0');
+}
+
+function filterProxyFeed() {
+  const q = (document.getElementById('proxySearch').value || '').toLowerCase();
+  const dir = document.getElementById('proxyDirFilter').value;
+  document.querySelectorAll('#proxyFeed .p-msg-row').forEach(row => {
+    const content = row.textContent.toLowerCase();
+    const rowDir = row.getAttribute('data-dir') || '';
+    const dirMatch = dir === 'all' || rowDir === dir;
+    row.style.display = (content.includes(q) && dirMatch) ? '' : 'none';
+  });
+}
+
+function exportProxyMessages() {
+  if (!proxyMsgs.length) { addLog('⚠️ No proxy messages to export', 'warning'); return; }
+  const blob = new Blob([JSON.stringify(proxyMsgs, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `ws_proxy_${Date.now()}.json`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  addLog(`💾 Exported ${proxyMsgs.length} proxy messages`, 'success');
 }
 
 /* ── AI ─────────────────────────────────────────────────────── */
@@ -677,26 +1080,7 @@ function copyAllBounty() {
 }
 
 /* ── Interceptor Advanced ──────────────────────────────────── */
-function filterInterceptor() {
-  const q = (document.getElementById('interceptSearch').value || '').toLowerCase();
-  const dir = document.getElementById('interceptDirFilter').value;
-  document.querySelectorAll('#interceptorLog .msg-row').forEach(row => {
-    const content = row.textContent.toLowerCase();
-    const rowDir = row.getAttribute('data-dir') || '';
-    const dirMatch = dir === 'all' || rowDir === dir;
-    row.style.display = (content.includes(q) && dirMatch) ? '' : 'none';
-  });
-}
-
-function exportMessages() {
-  if (!interceptorMsgs.length) { addLog('⚠️ No messages to export', 'warning'); return; }
-  const blob = new Blob([JSON.stringify(interceptorMsgs, null, 2)], { type: 'application/json' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = `ws_interceptor_${Date.now()}.json`;
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  addLog(`💾 Exported ${interceptorMsgs.length} messages`, 'success');
-}
+// (old fake interceptor helpers removed)
 
 /* ── Report Downloads ──────────────────────────────────────── */
 function downloadReport() {

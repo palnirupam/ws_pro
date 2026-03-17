@@ -18,3 +18,9 @@ logs/
 *.pdf
 *.json
 *.sarif
+
+# Local test outputs
+test_results.txt
+
+# Runtime lock file (single-instance dashboard guard)
+.dashboard.lock

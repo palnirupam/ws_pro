@@ -21,7 +21,7 @@
 | 🎯 **Bug Bounty Mode** | One-click copy of HackerOne/Bugcrowd-ready markdown reports |
 | 📄 **Multi-Format Reports** | PDF, HTML, JSON, and SARIF (CI/CD) export |
 | 🤖 **AI Analysis** | Anthropic Claude integration for attack chain analysis |
-| 🕵️ **Live Interceptor** | Capture, search, filter & replay WebSocket traffic |
+| 🕵️ **Live Interceptor / MITM Proxy** | Real WebSocket man-in-the-middle proxy to capture, filter & replay live traffic |
 | 🧨 **WebSocket Fuzzer** | Auto-detect crashes, DoS, and error leaks with malformed payloads |
 | ⚡ **Fast/Deep Modes** | Quick scans or comprehensive audits |
 | 🖥️ **CLI + Dashboard** | Use the web dashboard or scan from the command line |
@@ -59,6 +59,7 @@ ws_pro/
 │   └── timing.py             # Timing-based side channels & user enumeration
 ├── core/
 │   ├── scanner.py          # Endpoint discovery, fingerprinting, connection helpers
+│   ├── ws_proxy.py         # Real WebSocket MITM proxy (bridge + intercept/hold + replay)
 │   └── findings.py         # Thread-safe findings store, CVSS scoring
 ├── dashboard/
 │   ├── app.py              # Flask + Socket.IO server
@@ -86,7 +87,6 @@ ws_pro/
 ├── mock_server.py          # Vulnerable test server (13 scenarios)
 ├── test_ui.py              # UI smoke checks (local)
 ├── test_ws.py              # WebSocket connectivity checks (local)
-├── test_results.txt        # Local test output (generated)
 ├── .env.example            # Environment configuration template
 ├── requirements.txt        # Python dependencies
 ├── venv/                   # Local virtualenv (recommended; not committed)
@@ -303,18 +303,35 @@ Here is how a typical assessment flows using WS Tester Pro:
 
 ## 🕵️ Interceptor Mode Guide
 
-The Interceptor allows you to act as a proxy between your client and a target WebSocket server, capturing traffic in real-time and automatically flagging suspicious payloads.
+WS Tester Pro includes a **real WebSocket MITM proxy** that sits between your client and the target server:
 
-1. In the sidebar, check the **🕵️ Interceptor** box under Options.
-2. The **Interceptor Config** card will appear. Enter the target WebSocket URL you want to connect to (e.g. `ws://target.com/chat`).
-3. Click **▶ Start Proxy**. The proxy will connect to the target.
-4. Switch to the **🕵️ Interceptor** tab in the main view.
-5. You will see traffic flowing in real-time. Messages are grouped by direction (`CLIENT→SERVER`, `SERVER→CLIENT`).
-6. **Key Features**:
-   - **⚠️ FLAGGED Tags**: Payloads matching common attack patterns (SQLi, XSS, Path Traversal, JWTs) are highlighted in red automatically.
-   - **Search & Filter**: Type in the search box to find specific strings, or use the dropdown to view only Client or Server messages.
-   - **JSON Highlighting**: Valid JSON messages are automatically syntax-highlighted.
-   - **Export**: Click the **💾 Export** button to save the entire capture session as a JSON file for later analysis.
+`Client/App → ws://localhost:<LOCAL_PORT> → [WS Tester Pro Proxy] → <TARGET_WS_URL>`
+
+### Start the proxy (Dashboard)
+1. Open the dashboard: **http://localhost:5000**
+2. Go to the **Interceptor** tab
+3. Set:
+   - **Target WS URL**: the real server (example: `wss://example.com/ws`)
+   - **Local Port**: where the proxy will listen (default: `8080`)
+   - **Intercept Mode** (optional): hold messages for manual review
+4. Click **Start Proxy**
+5. Point your app/browser to **`ws://localhost:<LOCAL_PORT>`** instead of the real server.
+
+### Live feed (Capture / Search / Export)
+- Messages show **time**, **direction**, **size**, and **flags**.
+- Use **Search** and **direction filter** to narrow down traffic.
+- Click **Export** to download captured messages as JSON.
+
+### Intercept Mode (Hold → Forward / Modify / Drop)
+When **Intercept Mode** is enabled, messages are marked **HELD** and appear in **Held Messages**:
+- **Forward**: send as-is to the other side
+- **Modify & Forward**: edit payload and send
+- **Drop**: discard the message (not forwarded)
+
+### Replay
+- Each captured row has a **Replay** action.
+- Replay sends the payload back to the target **(client→server)** through the proxy.
+- “System/error” rows (e.g. target unreachable) don’t contain real payloads and can’t be replayed.
 
 ---
 
@@ -416,6 +433,30 @@ pytest tests/ -v
 # Run with the mock vulnerable server
 python mock_server.py    # Terminal 1
 python main.py --target ws://localhost:8765    # Terminal 2
+```
+
+### Proxy quick test (Mock server)
+1. Terminal 1:
+   - `python mock_server.py` (WebSocket: `ws://localhost:8765`)
+2. Terminal 2:
+   - `python dashboard/app.py` (Dashboard: `http://localhost:5000`)
+3. In the dashboard → **Interceptor** tab:
+   - Target WS URL: `ws://localhost:8765`
+   - Local Port: `8080`
+   - Intercept Mode: **OFF** (first test)
+   - Click **Start Proxy**
+4. Click **🧪 Quick Test** (generates proxy traffic)
+
+### Windows port troubleshooting
+If you see “address already in use” or “connection refused”, check which PID is using a port:
+
+```powershell
+netstat -ano | findstr ":5000"
+netstat -ano | findstr ":8080"
+netstat -ano | findstr ":8765"
+netstat -ano | findstr ":8766"
+
+taskkill /PID <PID> /F
 ```
 
 The mock server simulates 13 vulnerability scenarios including SQL injection, XSS, command injection, IDOR, JWT bypass, timing oracle, and more.

@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>WS Tester Pro — WebSocket Security Scanner</title>
 <meta name="description" content="Professional WebSocket penetration testing tool with real-time dashboard, 20+ automated security tests, and OWASP-format reports.">
-<link rel="stylesheet" href="/static/css/app.css">
+<link rel="stylesheet" href="/static/css/app.css?v={{ css_v }}">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 </head>
 <body>
@@ -112,7 +112,6 @@
       <div class="opt-row"><input type="checkbox" id="optMassAssign" checked><label for="optMassAssign">🔓 Mass Assign</label></div>
       <div class="opt-row"><input type="checkbox" id="optLogic"      checked><label for="optLogic">🧠 Business Logic</label></div>
       <div class="opt-row"><input type="checkbox" id="optFastMode"   checked><label for="optFastMode">⚡ Fast mode</label></div>
-      <div class="opt-row"><input type="checkbox" id="optIntercept"         ><label for="optIntercept">🕵️ Interceptor</label></div>
       <div class="divider"></div>
       <label style="font-size:.73rem;color:var(--text2)">Concurrent threads</label>
       <select id="concurrentCount">
@@ -120,13 +119,6 @@
         <option value="5" selected>5 — Normal</option>
         <option value="10">10 — Aggressive</option>
       </select>
-    </div>
-
-    <div class="card" id="interceptorCard" style="display:none">
-      <h3>🕵️ Interceptor Config</h3>
-      <input type="text"   id="interceptWsUrl"  placeholder="wss://target.com/ws"/>
-      <input type="number" id="interceptPort"    value="8765"/>
-      <button class="btn btn-secondary" onclick="startInterceptor()" style="font-size:.76rem">▶ Start Proxy</button>
     </div>
 
     <div class="divider"></div>
@@ -231,20 +223,70 @@
 
     <!-- Pane: Interceptor -->
     <div class="tab-pane" id="pane-interceptor">
-      <div class="interceptor-toolbar">
-        <input type="text" id="interceptSearch" placeholder="🔍 Search messages..." oninput="filterInterceptor()" style="flex:1;margin-bottom:0" />
-        <select id="interceptDirFilter" onchange="filterInterceptor()" style="width:auto;min-width:120px;margin-bottom:0">
+      <!-- Section A: Proxy Control -->
+      <div class="proxy-control card">
+        <div class="proxy-top">
+          <div class="proxy-status">
+            <span class="p-dot stopped" id="proxyDot"></span>
+            <span id="proxyStatusText">Proxy Status: Stopped</span>
+          </div>
+          <div class="proxy-actions">
+            <button class="btn btn-secondary" id="startProxyBtn" style="width:auto;padding:6px 12px;font-size:.76rem" onclick="startProxy()">▶ Start Proxy</button>
+            <button class="btn btn-secondary" id="stopProxyBtn"  style="width:auto;padding:6px 12px;font-size:.76rem" onclick="stopProxy()" disabled>⏹ Stop Proxy</button>
+            <button class="btn btn-secondary" id="testProxyBtn"  style="width:auto;padding:6px 12px;font-size:.76rem" onclick="quickProxyTest()">🧪 Quick Test</button>
+          </div>
+        </div>
+        <div class="proxy-grid">
+          <div>
+            <label class="mini-label">Target WS URL</label>
+            <input type="text" id="proxyTargetUrl" placeholder="wss://target.com/ws or ws://localhost:8765" autocomplete="off" spellcheck="false"/>
+          </div>
+          <div>
+            <label class="mini-label">Local Port</label>
+            <input type="number" id="proxyPort" value="8080" min="1" max="65535"/>
+          </div>
+          <div class="proxy-opt">
+            <label class="opt-row" style="padding:0;margin:0">
+              <input type="checkbox" id="proxyInterceptMode">
+              <span>🕵️ Intercept Mode (hold messages)</span>
+            </label>
+          </div>
+        </div>
+        <div class="proxy-info" id="proxyInfoBox">
+          Point your browser/app to <span class="mono" id="proxyLocalUrl">ws://localhost:8080</span> instead of the real server.
+        </div>
+      </div>
+
+      <!-- Section D: Stats bar -->
+      <div class="proxy-statsbar">
+        <div class="ps-item">Total: <b id="pTotal">0</b></div>
+        <div class="ps-item">C→S: <b id="pC2S">0</b></div>
+        <div class="ps-item">S→C: <b id="pS2C">0</b></div>
+        <div class="ps-item">Flagged: <b id="pFlagged">0</b></div>
+        <div class="ps-item">Held: <b id="pHeld">0</b></div>
+        <div class="ps-actions">
+          <button class="btn btn-secondary" style="width:auto;padding:4px 10px;font-size:.72rem" onclick="exportProxyMessages()">💾 Export</button>
+          <button class="btn btn-secondary" style="width:auto;padding:4px 10px;font-size:.72rem" onclick="clearProxyUI()">🗑 Clear</button>
+        </div>
+      </div>
+
+      <!-- Section B: Live Message Feed -->
+      <div class="proxy-toolbar">
+        <input type="text" id="proxySearch" placeholder="🔍 Search messages..." oninput="filterProxyFeed()" style="flex:1;margin-bottom:0" />
+        <select id="proxyDirFilter" onchange="filterProxyFeed()" style="width:auto;min-width:140px;margin-bottom:0">
           <option value="all">All</option>
           <option value="client">Client→Server</option>
           <option value="server">Server→Client</option>
         </select>
-        <span style="font-size:.74rem;color:var(--text2)">Msgs: <b id="msgCount" style="color:var(--blue)">0</b></span>
-        <span style="font-size:.74rem;color:var(--text2)">Flagged: <b id="flagCount" style="color:var(--red)">0</b></span>
-        <button class="btn btn-secondary" style="width:auto;padding:4px 10px;font-size:.72rem" onclick="exportMessages()">💾 Export</button>
-        <button class="btn btn-secondary" style="width:auto;padding:4px 10px;font-size:.72rem" onclick="clearInterceptorUI()">🗑 Clear</button>
       </div>
-      <div id="interceptorLog">
-        <div class="empty-state"><div class="icon">🕵️</div><p>Enable interceptor and start proxy</p></div>
+      <div id="proxyFeed">
+        <div class="empty-state"><div class="icon">🧲</div><p>Start the proxy to see live WebSocket traffic</p></div>
+      </div>
+
+      <!-- Section C: Held Messages -->
+      <div id="heldWrap" style="display:none">
+        <h3 class="held-title">⏸ Held Messages (Intercept Mode)</h3>
+        <div id="heldList"></div>
       </div>
     </div>
 
@@ -274,7 +316,8 @@
   </div>
 </div>
 
+<!-- Socket.IO client (Flask-SocketIO does not serve /socket.io/socket.io.js) -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
-<script src="/static/js/app.js"></script>
+<script src="/static/js/app.js?v={{ js_v }}"></script>
 </body>
 </html>

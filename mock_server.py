@@ -12,6 +12,7 @@ import threading
 import hmac as _hmac
 import hashlib as _hashlib
 from http.server import HTTPServer, BaseHTTPRequestHandler
+import socket
 
 
 # Fake JWT (unsigned)
@@ -116,8 +117,12 @@ class _LoginHandler(BaseHTTPRequestHandler):
         pass  # Suppress logs
 
 
-def _start_http(port=8766):
-    server = HTTPServer(('0.0.0.0', port), _LoginHandler)
+def _start_http(port=8766, host='127.0.0.1'):
+    """
+    Start HTTP login endpoint.
+    Bind to 127.0.0.1 by default to avoid IPv6/dual-stack surprises on Windows.
+    """
+    server = HTTPServer((host, port), _LoginHandler)
     server.serve_forever()
 
 async def handler(websocket):
@@ -554,22 +559,68 @@ async def handler(websocket):
 
 
 async def main():
-    # Start HTTP login server
-    threading.Thread(target=_start_http, args=(8766,), daemon=True).start()
+    ws_host = '127.0.0.1'
+    http_host = '127.0.0.1'
+    ws_port_base = 8765
+    http_port_base = 8766
 
-    async with websockets.serve(handler, "localhost", 8765, max_size=1024*1024):
+    def _start_http_on_free_port(start_port: int, host: str = '127.0.0.1', max_tries: int = 50) -> int:
+        for p in range(start_port, start_port + max_tries):
+            try:
+                t = threading.Thread(target=_start_http, args=(p, host), daemon=True)
+                t.start()
+                # If bind failed inside _start_http, thread will die quickly,
+                # but we don't want to depend on timing; probe by binding ourselves.
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                try:
+                    s.connect((host, p))
+                    return p
+                except OSError:
+                    # Not listening; try next port.
+                    continue
+                finally:
+                    try:
+                        s.close()
+                    except Exception:
+                        pass
+            except OSError:
+                continue
+        return start_port
+
+    http_port = _start_http_on_free_port(http_port_base, host=http_host, max_tries=80)
+
+    ws_port = None
+    ws_server = None
+    last_err = None
+    for p in range(ws_port_base, ws_port_base + 120):
+        if p == http_port:
+            continue
+        try:
+            # IMPORTANT: Don't both "await" and "async with" the same Serve object.
+            # Start server by awaiting, then keep it running until shutdown.
+            ws_server = await websockets.serve(handler, ws_host, p, max_size=1024*1024)
+            ws_port = p
+            break
+        except OSError as e:
+            last_err = e
+            continue
+
+    if ws_port is None or ws_server is None:
+        raise last_err or OSError("Unable to bind WebSocket server")
+
+    try:
         try:
             # Windows terminals may default to cp1252; prefer UTF-8 for banner output.
             sys.stdout.reconfigure(encoding='utf-8')
         except Exception:
             pass
 
-        banner = """
+        banner = f"""
 ╔═══════════════════════════════════════════════════════════╗
 ║        WS Tester Pro — Vulnerable Lab Server              ║
 ╠═══════════════════════════════════════════════════════════╣
-║  WebSocket:   ws://localhost:8765                         ║
-║  HTTP Login:  http://localhost:8766/api/login             ║
+║  WebSocket:   ws://localhost:{ws_port:<5}                      ║
+║  HTTP Login:  http://localhost:{http_port:<5}/api/login          ║
 ╠═══════════════════════════════════════════════════════════╣
 ║  TEST USERS:                                              ║
 ║    admin  / admin123   (role: admin)                      ║
@@ -578,10 +629,10 @@ async def main():
 ║    test   / test       (role: tester)                     ║
 ╠═══════════════════════════════════════════════════════════╣
 ║  HOW TO TEST AUTH IN DASHBOARD:                           ║
-║  1. Target: ws://localhost:8765                           ║
+║  1. Target: ws://localhost:{ws_port:<5}                      ║
 ║  2. Auth → Username+Password                             ║
 ║     user: admin   pass: admin123                         ║
-║     Login URL: http://localhost:8766/api/login            ║
+║     Login URL: http://localhost:{http_port:<5}/api/login          ║
 ║  3. Click Test Auth → should show ✅                      ║
 ║  4. Start Scan → authenticated findings!                  ║
 ╚═══════════════════════════════════════════════════════════╝
@@ -591,11 +642,18 @@ async def main():
         except UnicodeEncodeError:
             print(
                 "WS Tester Pro — Vulnerable Lab Server\n"
-                "WebSocket:  ws://localhost:8765\n"
-                "HTTP Login: http://localhost:8766/api/login\n"
+                f"WebSocket:  ws://localhost:{ws_port}\n"
+                f"HTTP Login: http://localhost:{http_port}/api/login\n"
                 "Users: admin/admin123, alice/alice123, bob/bob123, test/test\n"
             )
+
         await asyncio.Future()
+    finally:
+        try:
+            ws_server.close()
+            await ws_server.wait_closed()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ import sys
 import json
 import threading
 import time
+import atexit
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
@@ -53,6 +54,8 @@ from attacks.business_logic  import test_business_logic
 from reports.generator import generate_html_report
 from utils.logger import log
 from core.auth_profile import auth_profile, reset_auth, AuthProfile
+from core.ws_proxy import WSProxyController, validate_ws_url
+import socket as _socket
 
 app = Flask(__name__, template_folder='templates', static_folder='static')
 app.config['SECRET_KEY'] = os.environ.get('WS_SECRET_KEY', os.urandom(24).hex())
@@ -65,6 +68,66 @@ if cors_origins != '*':
     cors_origins = [o.strip() for o in cors_origins.split(',')]
 socketio = SocketIO(app, cors_allowed_origins=cors_origins, async_mode='threading')
 
+# ── Single-instance guard (prevents multiple :5000 dashboards) ────────────────
+_LOCK_FH = None
+
+def _acquire_single_instance_lock() -> None:
+    """
+    Prevent running multiple dashboard instances at once.
+    On Windows, accidental multi-run causes socket events to hit a different instance,
+    making proxy controls look 'randomly broken'.
+    """
+    global _LOCK_FH
+    lock_path = os.path.join(BASE_DIR, '.dashboard.lock')
+    try:
+        # Keep file handle open for lifetime of process.
+        _LOCK_FH = open(lock_path, 'a+')
+    except Exception:
+        return
+
+    try:
+        if os.name == 'nt':
+            import msvcrt  # type: ignore
+            try:
+                msvcrt.locking(_LOCK_FH.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError:
+                print("❌ Another WS Tester Pro dashboard is already running. Close other instances first.", flush=True)
+                raise SystemExit(2)
+        else:
+            try:
+                import fcntl  # type: ignore
+                fcntl.flock(_LOCK_FH.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except Exception:
+                print("❌ Another WS Tester Pro dashboard is already running. Close other instances first.", flush=True)
+                raise SystemExit(2)
+    finally:
+        try:
+            _LOCK_FH.seek(0)
+            _LOCK_FH.truncate(0)
+            _LOCK_FH.write(str(os.getpid()))
+            _LOCK_FH.flush()
+        except Exception:
+            pass
+
+def _release_single_instance_lock() -> None:
+    global _LOCK_FH
+    try:
+        if not _LOCK_FH:
+            return
+        if os.name == 'nt':
+            import msvcrt  # type: ignore
+            try:
+                msvcrt.locking(_LOCK_FH.fileno(), msvcrt.LK_UNLCK, 1)
+            except Exception:
+                pass
+        _LOCK_FH.close()
+    except Exception:
+        pass
+    _LOCK_FH = None
+
+_acquire_single_instance_lock()
+atexit.register(_release_single_instance_lock)
+
 # ── State ─────────────────────────────────────────────────────────────────────
 scan_running   = False
 scan_thread    = None
@@ -74,6 +137,14 @@ interceptor_messages = []
 last_report_html = ''
 last_report_target = ''
 scan_history: list[dict] = []  # Scan session history
+
+# ── Proxy state (real WS MITM) ────────────────────────────────────────────────
+proxy_running = False
+proxy_port = 8080
+proxy_target_url = ''
+proxy_intercept_mode = False
+proxy_held_messages: list[dict] = []
+proxy_controller = WSProxyController()
 
 
 def emit_log(msg, level='info'):
@@ -89,7 +160,16 @@ def emit_finding(finding_dict):
 # ── Routes ────────────────────────────────────────────────────────────────────
 @app.route('/')
 def index():
-    resp = render_template('index.html')
+    # Cache-bust static assets based on file mtimes (no restart required).
+    try:
+        js_path  = os.path.join(os.path.dirname(__file__), 'static', 'js', 'app.js')
+        css_path = os.path.join(os.path.dirname(__file__), 'static', 'css', 'app.css')
+        js_v  = int(os.stat(js_path).st_mtime_ns)
+        css_v = int(os.stat(css_path).st_mtime_ns)
+    except Exception:
+        js_v = css_v = int(time.time())
+
+    resp = render_template('index.html', js_v=js_v, css_v=css_v)
     return resp, 200, {
         'Cache-Control': 'no-store, no-cache, must-revalidate',
         'Pragma': 'no-cache',
@@ -543,6 +623,251 @@ def on_clear_interceptor():
     interceptor_messages.clear()
 
 
+# ── WebSocket Proxy (real MITM) ───────────────────────────────────────────────
+def _emit_proxy_status(running: bool, port: int | None = None, target: str | None = None, intercept_mode: bool | None = None, error: str = ''):
+    socketio.emit('proxy_status', {
+        'running': bool(running),
+        'port': int(port if port is not None else proxy_port),
+        'target': target if target is not None else proxy_target_url,
+        'intercept_mode': bool(intercept_mode if intercept_mode is not None else proxy_intercept_mode),
+        'error': error or '',
+    })
+
+def _emit_proxy_reset(reason: str = ''):
+    """Tell UI to clear stale held messages after stop/start."""
+    socketio.emit('proxy_reset', {'reason': reason or ''})
+
+
+def _on_proxy_message(msg: dict):
+    """Callback from core.ws_proxy — forward to dashboard UI."""
+    global proxy_held_messages
+    try:
+        if msg.get('held'):
+            proxy_held_messages.append(msg)
+        socketio.emit('proxy_message', msg)
+    except Exception:
+        # Avoid crashing proxy thread on UI emit issues
+        pass
+
+
+@socketio.on('start_proxy')
+def on_start_proxy(data):
+    global proxy_running, proxy_port, proxy_target_url, proxy_intercept_mode, proxy_held_messages
+
+    if proxy_running:
+        emit_log('⚠️ Proxy already running', 'warning')
+        _emit_proxy_status(True)
+        return
+
+    ws_url = (data.get('ws_url') or '').strip()
+    port = int(data.get('port') or 8080)
+    intercept_mode = bool(data.get('intercept_mode', False))
+
+    try:
+        print(f"[Proxy] start_proxy ws_url={ws_url} port={port} intercept={intercept_mode}", flush=True)
+    except Exception:
+        pass
+
+    ok, err = validate_ws_url(ws_url)
+    if not ok:
+        emit_log(f'❌ Invalid WS URL: {err}', 'error')
+        _emit_proxy_status(False, port=port, target=ws_url, intercept_mode=intercept_mode, error=err)
+        return
+
+    if port < 1 or port > 65535:
+        emit_log('❌ Invalid proxy port', 'error')
+        _emit_proxy_status(False, port=port, target=ws_url, intercept_mode=intercept_mode, error='Invalid port')
+        return
+
+    # Preflight: ensure we can bind the local listen port.
+    try:
+        s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        try:
+            s.bind(('127.0.0.1', port))
+        finally:
+            try:
+                s.close()
+            except Exception:
+                pass
+    except OSError as e:
+        proxy_running = False
+        msg = f'Local port {port} unavailable: {e}'
+        emit_log(f'❌ {msg}', 'error')
+        _emit_proxy_status(False, port=port, target=ws_url, intercept_mode=intercept_mode, error=str(e)[:200])
+        return
+
+    proxy_running = True
+    proxy_port = port
+    proxy_target_url = ws_url
+    proxy_intercept_mode = intercept_mode
+    proxy_held_messages = []
+    _emit_proxy_reset('start_proxy')
+
+    emit_log(f'🧲 Starting WS proxy on ws://localhost:{port} → {ws_url}', 'info')
+    emit_log('ℹ️ Point your browser/app to the local proxy URL instead of the real server', 'info')
+
+    # Emit immediately so UI doesn't stick on "Starting..." without feedback.
+    _emit_proxy_status(False, port=port, target=ws_url, intercept_mode=intercept_mode, error='starting')
+
+    def _starter():
+        global proxy_running
+        try:
+            proxy_controller.start(
+                target_url=ws_url,
+                listen_host='127.0.0.1',
+                listen_port=port,
+                intercept_mode=intercept_mode,
+                on_message=_on_proxy_message,
+            )
+            _emit_proxy_status(True, port=port, target=ws_url, intercept_mode=intercept_mode)
+            emit_log(f'✅ Proxy running on ws://localhost:{port}', 'success')
+        except Exception as e:
+            proxy_running = False
+            err = str(e)[:200]
+            emit_log(f'❌ Proxy start failed: {err}', 'error')
+            _emit_proxy_status(False, port=port, target=ws_url, intercept_mode=intercept_mode, error=err)
+
+    threading.Thread(target=_starter, daemon=True).start()
+
+
+@socketio.on('stop_proxy')
+def on_stop_proxy(data=None):
+    global proxy_running
+    if not proxy_running:
+        _emit_proxy_status(False)
+        return
+    proxy_running = False
+    _emit_proxy_status(False, error='stopping')
+    _emit_proxy_reset('stop_proxy')
+
+    def _stopper():
+        try:
+            proxy_controller.stop()
+        except Exception as e:
+            emit_log(f'❌ Proxy stop failed: {str(e)[:200]}', 'error')
+        emit_log('🧲 Proxy stopped', 'info')
+        _emit_proxy_status(False)
+        _emit_proxy_reset('stopped')
+
+    threading.Thread(target=_stopper, daemon=True).start()
+
+@socketio.on('get_proxy_status')
+def on_get_proxy_status(data=None):
+    """Allow UI to refresh proxy status on demand."""
+    try:
+        print(f"[Proxy] get_proxy_status running={proxy_running} port={proxy_port} target={proxy_target_url}", flush=True)
+    except Exception:
+        pass
+    _emit_proxy_status(bool(proxy_running))
+
+
+@socketio.on('forward_message')
+def on_forward_message(data):
+    mid = (data.get('message_id') or '').strip()
+    modified = data.get('modified_content', None)
+    sid = request.sid
+    try:
+        print(f"[Proxy] forward_message id={mid} modified_len={len(modified) if isinstance(modified, str) else 0}", flush=True)
+    except Exception:
+        pass
+    if not mid:
+        emit_log('❌ Missing message_id to forward', 'error')
+        res = {'ok': False, 'action': 'forward', 'id': mid, 'error': 'missing_id'}
+        socketio.emit('proxy_action_result', res, to=sid)
+        return res
+    try:
+        ok = proxy_controller.forward_held(mid, modified_content=modified)
+    except Exception as e:
+        err = str(e)[:200]
+        emit_log(f'❌ Forward failed: {err}', 'error')
+        res = {'ok': False, 'action': 'forward', 'id': mid, 'error': err}
+        socketio.emit('proxy_action_result', res, to=sid)
+        return res
+    if not ok:
+        emit_log('⚠️ Failed to forward — not held / proxy not running', 'warning')
+        res = {'ok': False, 'action': 'forward', 'id': mid, 'error': 'not_held_or_not_running'}
+        socketio.emit('proxy_action_result', res, to=sid)
+        return res
+
+    # Update UI immediately (otherwise held items look stuck).
+    try:
+        global proxy_held_messages
+        proxy_held_messages = [m for m in proxy_held_messages if m.get('id') != mid]
+    except Exception:
+        pass
+    socketio.emit('proxy_held_resolved', {'id': mid, 'action': 'forward'}, to=sid)
+    res = {'ok': True, 'action': 'forward', 'id': mid}
+    socketio.emit('proxy_action_result', res, to=sid)
+    return res
+
+
+@socketio.on('drop_message')
+def on_drop_message(data):
+    mid = (data.get('message_id') or '').strip()
+    sid = request.sid
+    try:
+        print(f"[Proxy] drop_message id={mid}", flush=True)
+    except Exception:
+        pass
+    if not mid:
+        emit_log('❌ Missing message_id to drop', 'error')
+        res = {'ok': False, 'action': 'drop', 'id': mid, 'error': 'missing_id'}
+        socketio.emit('proxy_action_result', res, to=sid)
+        return res
+    try:
+        ok = proxy_controller.drop_held(mid)
+    except Exception as e:
+        err = str(e)[:200]
+        emit_log(f'❌ Drop failed: {err}', 'error')
+        res = {'ok': False, 'action': 'drop', 'id': mid, 'error': err}
+        socketio.emit('proxy_action_result', res, to=sid)
+        return res
+    if not ok:
+        emit_log('⚠️ Failed to drop — not held / proxy not running', 'warning')
+        res = {'ok': False, 'action': 'drop', 'id': mid, 'error': 'not_held_or_not_running'}
+        socketio.emit('proxy_action_result', res, to=sid)
+        return res
+
+    try:
+        global proxy_held_messages
+        proxy_held_messages = [m for m in proxy_held_messages if m.get('id') != mid]
+    except Exception:
+        pass
+    socketio.emit('proxy_held_resolved', {'id': mid, 'action': 'drop'}, to=sid)
+    res = {'ok': True, 'action': 'drop', 'id': mid}
+    socketio.emit('proxy_action_result', res, to=sid)
+    return res
+
+
+@socketio.on('replay_via_proxy')
+def on_replay_via_proxy(data):
+    msg = (data.get('message') or '').strip()
+    direction = (data.get('direction') or 'client_to_server').strip()
+    if not msg:
+        emit_log('❌ Missing message to replay', 'error')
+        return {'ok': False, 'error': 'missing_message'}
+    ok = proxy_controller.replay(msg, direction=direction)
+    if not ok:
+        emit_log('❌ Replay failed — proxy not running or no active client session', 'error')
+        return {'ok': False, 'error': 'proxy_not_running_or_no_session'}
+    emit_log('🔄 Replayed message via proxy', 'info')
+    return {'ok': True}
+
+
+@socketio.on('client_error')
+def on_client_error(data):
+    """JS runtime errors from browser (debugging UI not updating)."""
+    try:
+        msg = (data or {}).get('message', '')
+        src = (data or {}).get('source', '')
+        stack = (data or {}).get('stack', '')
+        emit_log(f'🧯 UI error: {msg} @ {src}', 'error')
+        if stack:
+            log.error(f'UI error stack: {stack}')
+    except Exception:
+        pass
+
+
 # ── Scan History ──────────────────────────────────────────────────────────────
 @socketio.on('save_session')
 def on_save_session(data):
@@ -637,189 +962,6 @@ def on_import_findings(data):
 
     emit_log(f'📂 Imported {len(findings)} findings', 'success')
     socketio.emit('scan_complete', {'count': len(store.all())})
-
-
-# ── Interceptor ───────────────────────────────────────────────────────────────
-interceptor_running = False
-interceptor_thread = None
-
-SUSPICIOUS_PATTERNS = [
-    (r'(?i)(select|insert|update|delete|drop|union).*?(from|into|table|where)', '🔴 SQL Pattern'),
-    (r'(?i)<\s*script', '🔴 XSS Pattern'),
-    (r'(?i)(password|passwd|secret|token|api.?key)', '🟡 Sensitive Data'),
-    (r'(?i)(eyJ[A-Za-z0-9_-]+\.eyJ)', '🟡 JWT Token'),
-    (r'(?i)(admin|root|sudo|superuser)', '🟠 Privilege Keyword'),
-    (r'(?i)(\.\./|\.\.\\|%2e%2e)', '🟠 Path Traversal'),
-    (r'(?i)(;|\||\&\&)\s*(ls|cat|id|whoami|ping|curl)', '🔴 Command Injection'),
-]
-
-import re as _re
-
-def _check_suspicious(msg_text):
-    """Check message for suspicious patterns, return list of flags."""
-    flags = []
-    for pattern, label in SUSPICIOUS_PATTERNS:
-        if _re.search(pattern, str(msg_text)):
-            flags.append(label)
-    return flags
-
-
-@socketio.on('start_interceptor')
-def on_start_interceptor(data):
-    global interceptor_running, interceptor_thread
-
-    ws_url = data.get('ws_url', '').strip()
-    if not ws_url:
-        emit_log('❌ No WebSocket URL provided for interceptor', 'error')
-        return
-
-    if interceptor_running:
-        emit_log('⚠️ Interceptor already running', 'warning')
-        return
-
-    interceptor_running = True
-    emit_log(f'🕵️ Interceptor connecting to {ws_url}', 'info')
-
-    interceptor_thread = threading.Thread(
-        target=_run_interceptor,
-        args=(ws_url,),
-        daemon=True
-    )
-    interceptor_thread.start()
-
-
-@socketio.on('stop_interceptor')
-def on_stop_interceptor():
-    global interceptor_running
-    interceptor_running = False
-    emit_log('🕵️ Interceptor stopped', 'info')
-
-
-@socketio.on('replay_message')
-def on_replay_message(data):
-    msg = data.get('message', '')
-    ws_url = data.get('ws_url', '')
-    if not msg or not ws_url:
-        emit_log('❌ Missing message or URL for replay', 'error')
-        return
-    threading.Thread(target=_replay_msg, args=(ws_url, msg), daemon=True).start()
-
-
-def _replay_msg(ws_url, message):
-    import asyncio as _asyncio
-    import websockets as _ws
-
-    async def _do_replay():
-        try:
-            async with _ws.connect(ws_url, open_timeout=5) as conn:
-                await conn.send(message)
-                emit_log(f'🔄 Replayed: {message[:80]}', 'info')
-                try:
-                    resp = await _asyncio.wait_for(conn.recv(), timeout=3)
-                    _emit_interceptor_msg('SERVER→CLIENT', resp, '🔄 Replay response')
-                except _asyncio.TimeoutError:
-                    pass
-                except _ws.exceptions.ConnectionClosed:
-                    emit_log('Connection closed during replay', 'warning')
-        except ConnectionRefusedError:
-            emit_log(f'❌ Connection refused: {ws_url}', 'error')
-        except Exception as e:
-            emit_log(f'❌ Replay failed: {e}', 'error')
-
-    loop = _asyncio.new_event_loop()
-    try:
-        loop.run_until_complete(_do_replay())
-    finally:
-        loop.close()
-
-
-def _emit_interceptor_msg(direction, message, extra=''):
-    ts = datetime.now().strftime('%H:%M:%S')
-    msg_str = str(message)[:500]
-    flags = _check_suspicious(msg_str)
-    flagged = len(flags) > 0
-
-    entry = {
-        'time': ts,
-        'direction': direction,
-        'message': msg_str,
-        'flagged': flagged,
-        'flags': flags,
-        'extra': extra,
-    }
-    interceptor_messages.append(entry)
-    socketio.emit('interceptor_message', entry)
-
-
-def _run_interceptor(ws_url):
-    global interceptor_running
-    import websockets as _ws
-
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
-    async def _intercept():
-        global interceptor_running
-        import ssl as _ssl
-
-        ssl_ctx = None
-        if ws_url.startswith('wss://'):
-            ssl_ctx = _ssl.create_default_context()
-            ssl_ctx.check_hostname = False
-            ssl_ctx.verify_mode = _ssl.CERT_NONE
-
-        try:
-            async with _ws.connect(ws_url, ssl=ssl_ctx, open_timeout=10) as ws:
-                emit_log(f'✅ Interceptor connected to {ws_url}', 'success')
-
-                test_payloads = [
-                    '{"type":"ping"}',
-                    '{"type":"auth","token":"test"}',
-                    '{"query":"SELECT * FROM users"}',
-                    '<script>alert(1)</script>',
-                    '{"cmd":"id"}',
-                    '{"type":"subscribe","channel":"notifications"}',
-                    '{"action":"get_profile","user_id":"1"}',
-                    '{"action":"get_profile","user_id":"../../etc/passwd"}',
-                ]
-
-                for payload in test_payloads:
-                    if not interceptor_running:
-                        break
-
-                    _emit_interceptor_msg('CLIENT→SERVER', payload)
-
-                    try:
-                        await ws.send(payload)
-                        try:
-                            resp = await asyncio.wait_for(ws.recv(), timeout=3)
-                            _emit_interceptor_msg('SERVER→CLIENT', resp)
-                        except asyncio.TimeoutError:
-                            _emit_interceptor_msg('SERVER→CLIENT', '(no response — timeout)', '⏱')
-                    except _ws.exceptions.ConnectionClosed:
-                        _emit_interceptor_msg('SERVER→CLIENT', '(connection closed)', '❌')
-                        break
-                    except Exception as e:
-                        _emit_interceptor_msg('SERVER→CLIENT', f'(error: {e})', '❌')
-
-                    await asyncio.sleep(0.3)
-
-                emit_log(f'🕵️ Interceptor captured {len(interceptor_messages)} messages', 'success')
-
-        except ConnectionRefusedError:
-            emit_log(f'❌ Connection refused: {ws_url}', 'error')
-        except Exception as e:
-            emit_log(f'❌ Interceptor connection failed: {e}', 'error')
-        finally:
-            interceptor_running = False
-
-    try:
-        loop.run_until_complete(_intercept())
-    except Exception as e:
-        emit_log(f'❌ Interceptor error: {e}', 'error')
-    finally:
-        interceptor_running = False
-        loop.close()
 
 
 # ── Async helper ──────────────────────────────────────────────────────────────
@@ -1054,4 +1196,4 @@ if __name__ == '__main__':
         print('  API Key: loaded from .env')
     print()
 
-    socketio.run(app, host='0.0.0.0', port=5000, debug=False)
+    socketio.run(app, host='0.0.0.0', port=5000, debug=False, allow_unsafe_werkzeug=True)
