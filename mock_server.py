@@ -242,7 +242,9 @@ async def handler(websocket):
             action = data.get('action', '')
 
             # ── Auth endpoint (timing vulnerability) ──────────────────
-            if msg_type == 'auth' or data.get('username'):
+            # Trigger auth flow only when it looks like an auth request, not when
+            # other endpoints include a "username" field (e.g. profile updates).
+            if msg_type == 'auth' or (data.get('username') and data.get('password')):
                 username = data.get('username', '')
                 password = data.get('password', '')
 
@@ -288,7 +290,11 @@ async def handler(websocket):
                 continue
 
             # ── SQL Injection (error-based) ───────────────────────────
-            if data.get('query') or data.get('search') or data.get('username'):
+            # Note: some other lab endpoints legitimately include "username"
+            # (e.g., mass assignment/profile updates). Don't route those here.
+            if (data.get('query') or data.get('search') or data.get('username')) and action not in (
+                'update_profile', 'register', 'create_user', 'edit_account', 'update_settings'
+            ) and msg_type not in ('profile_update', 'user_update'):
                 payload = data.get('query', data.get('search', data.get('username', '')))
                 if any(c in payload for c in ["'", '"', ';', '--', 'UNION', 'SELECT']):
                     await websocket.send(json.dumps({
@@ -510,6 +516,77 @@ async def handler(websocket):
                         ],
                         'authenticated': False,
                     }))
+                continue
+
+            # ── Mass Assignment lab endpoints (intentionally vulnerable) ───────
+            # These endpoints simulate servers that blindly accept and reflect
+            # user-provided fields (no allowlist), enabling privilege escalation.
+            if action in ('update_profile', 'register', 'create_user', 'edit_account', 'update_settings') or \
+               msg_type in ('profile_update', 'user_update'):
+                # Blindly reflect all fields back (vulnerable behavior).
+                resp = dict(data)
+                resp.update({
+                    'success': True,
+                    'updated': True,
+                    'note': 'Profile updated (no field allowlist)',
+                })
+                await websocket.send(json.dumps(resp))
+                continue
+
+            # ── Business Logic lab endpoints (intentionally vulnerable) ───────
+            # Accepts logically invalid inputs (negative/zero/overflow/workflow bypass).
+            if action in ('purchase', 'transfer', 'withdraw', 'apply_discount',
+                          'complete_payment', 'checkout', 'claim_bonus', 'use_coupon', 'get_items'):
+                resp = {'success': True, 'action': action, 'echo': data}
+
+                if action == 'purchase':
+                    qty = data.get('quantity', 1)
+                    price = data.get('price', 100)
+                    resp['order'] = {
+                        'item_id': data.get('item_id', '1'),
+                        'quantity': qty,
+                        'price': price,
+                        'total': qty * price if isinstance(qty, (int, float)) and isinstance(price, (int, float)) else 0,
+                        'purchased': True,
+                    }
+                    resp['total'] = resp['order']['total']
+
+                elif action == 'transfer':
+                    amt = data.get('amount', 0)
+                    resp['transferred'] = True
+                    resp['balance'] = 500 - amt if isinstance(amt, (int, float)) else 500
+
+                elif action == 'withdraw':
+                    amt = data.get('amount', 0)
+                    resp['withdrawn'] = True
+                    resp['balance'] = 500 - amt if isinstance(amt, (int, float)) else 500
+
+                elif action == 'apply_discount':
+                    pct = data.get('percent', 0)
+                    resp['price'] = 100
+                    resp['total'] = 100 * (1 - (pct / 100)) if isinstance(pct, (int, float)) else 100
+
+                elif action == 'complete_payment':
+                    resp['completed'] = True
+                    resp['confirmed'] = True
+
+                elif action == 'checkout':
+                    resp['order'] = {'id': '1', 'status': 'paid' if data.get('payment_status') == 'success' else 'pending'}
+
+                elif action == 'claim_bonus':
+                    resp['bonus'] = {'id': data.get('bonus_id', 'welcome_bonus'), 'credited': True}
+
+                elif action == 'use_coupon':
+                    resp['discount'] = {'code': data.get('code', 'SAVE50'), 'applied': True}
+
+                elif action == 'get_items':
+                    limit = data.get('limit', 10)
+                    offset = data.get('offset', 0)
+                    resp['items'] = [{'id': i} for i in range(1, 6)]
+                    resp['limit'] = limit
+                    resp['offset'] = offset
+
+                await websocket.send(json.dumps(resp))
                 continue
 
             # ── Custom header acknowledgment ──────────────────────────

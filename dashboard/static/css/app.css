@@ -55,6 +55,7 @@ body {
 @keyframes slideDown { from { opacity:0; transform:translateY(-8px); } to { opacity:1; transform:none; } }
 @keyframes fadeIn   { from { opacity: 0; } to { opacity: 1; } }
 @keyframes glow     { 0%,100%{ box-shadow:0 0 4px #58a6ff22; } 50%{ box-shadow:0 0 14px #58a6ff66; } }
+@keyframes btnPulse { 0%{ transform:scale(1); box-shadow:0 0 0 #0000; } 50%{ transform:scale(1.02); box-shadow:0 0 18px #58a6ff33; } 100%{ transform:scale(1); box-shadow:0 0 0 #0000; } }
 @keyframes shimmer  { 0%{background-position:-200% 0} 100%{background-position:200% 0} }
 @keyframes countUp  { from { transform:scale(1.3); opacity:.4; } to { transform:scale(1); opacity:1; } }
 @keyframes shake    { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-5px); } 75% { transform: translateX(5px); } }
@@ -167,8 +168,22 @@ input:focus, select:focus {
   border: none; border-radius: 8px;
   font-size: .82rem; font-weight: 600;
   cursor: pointer;
-  transition: all .2s;
+  transition: transform .12s ease, box-shadow .2s ease, background .2s ease, border-color .2s ease, filter .2s ease;
   display: flex; align-items: center; justify-content: center; gap: 6px;
+}
+.btn:focus-visible { outline: none; box-shadow: 0 0 0 3px #58a6ff33; }
+.btn:active { transform: translateY(0); }
+
+/* Subtle light animation for option toggles (Select/Clear all, etc.) */
+.btn.btn-lite {
+  position: relative;
+  overflow: hidden;
+}
+.btn.btn-lite:hover {
+  box-shadow: 0 0 0 1px #58a6ff22, 0 6px 18px #0006;
+}
+.btn.btn-lite:active {
+  animation: btnPulse .22s ease;
 }
 .btn-primary   { background: linear-gradient(135deg, #238636, #2ea043); color: #fff; box-shadow: 0 2px 8px #23863633; }
 .btn-primary:hover   { filter: brightness(1.12); transform: translateY(-1px); box-shadow: 0 4px 14px #23863655; }

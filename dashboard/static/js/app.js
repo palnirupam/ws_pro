@@ -420,6 +420,23 @@ function setProgress(pct, txt) {
 }
 
 /* ── Scan ───────────────────────────────────────────────────── */
+function selectAllAttacks(on) {
+  const ids = [
+    // main scan options
+    'optAI', 'optPlaywright', 'optJWT', 'optTiming', 'optFuzzer',
+    'optRace', 'optSSRF', 'optSSTI', 'optMassAssign', 'optLogic',
+    'optFastMode',
+    // baseline tests
+    'optEnc', 'optInjection', 'optCSWSH', 'optRateLimit', 'optMsgSize',
+    'optInfoDisc', 'optGraphQL', 'optIDOR', 'optSubprotocol', 'optAuthBypass',
+  ];
+  ids.forEach(id => {
+    const el = document.getElementById(id);
+    if (el && el.type === 'checkbox') el.checked = !!on;
+  });
+  addLog(on ? '✅ Enabled all attacks' : '🧹 Cleared all attacks', 'info');
+}
+
 function startScan(resume = false) {
   const urlInput = document.getElementById('targetUrl');
   const url = urlInput.value.trim();
@@ -461,6 +478,16 @@ function startScan(resume = false) {
       mass_assignment:  document.getElementById('optMassAssign').checked,
       business_logic:   document.getElementById('optLogic').checked,
       fast_mode:        document.getElementById('optFastMode').checked,
+      enc_check:        document.getElementById('optEnc').checked,
+      injection_tests:  document.getElementById('optInjection').checked,
+      cswsh_check:      document.getElementById('optCSWSH').checked,
+      rate_limit_check: document.getElementById('optRateLimit').checked,
+      msg_size_check:   document.getElementById('optMsgSize').checked,
+      info_disc_check:  document.getElementById('optInfoDisc').checked,
+      graphql_check:    document.getElementById('optGraphQL').checked,
+      idor_check:       document.getElementById('optIDOR').checked,
+      subproto_check:   document.getElementById('optSubprotocol').checked,
+      auth_bypass:      document.getElementById('optAuthBypass').checked,
       concurrent_count: parseInt(document.getElementById('concurrentCount').value),
       auth:             getAuthData(),
     }

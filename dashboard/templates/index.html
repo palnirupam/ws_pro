@@ -101,6 +101,10 @@
 
     <div class="card">
       <h3>⚙️ Options</h3>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin:0 0 8px 0">
+        <button class="btn btn-secondary btn-sm btn-lite" style="width:auto;padding:5px 10px;font-size:.72rem" onclick="selectAllAttacks(true)">✅ Select all</button>
+        <button class="btn btn-secondary btn-sm btn-lite" style="width:auto;padding:5px 10px;font-size:.72rem" onclick="selectAllAttacks(false)">🧹 Clear all</button>
+      </div>
       <div class="opt-row"><input type="checkbox" id="optAI"        checked><label for="optAI">🤖 AI analysis</label></div>
       <div class="opt-row"><input type="checkbox" id="optPlaywright" checked><label for="optPlaywright">🌐 Browser discovery</label></div>
       <div class="opt-row"><input type="checkbox" id="optJWT"        checked><label for="optJWT">🔑 JWT attacks</label></div>
@@ -112,6 +116,19 @@
       <div class="opt-row"><input type="checkbox" id="optMassAssign" checked><label for="optMassAssign">🔓 Mass Assign</label></div>
       <div class="opt-row"><input type="checkbox" id="optLogic"      checked><label for="optLogic">🧠 Business Logic</label></div>
       <div class="opt-row"><input type="checkbox" id="optFastMode"   checked><label for="optFastMode">⚡ Fast mode</label></div>
+
+      <div class="divider"></div>
+      <h3 style="margin:0 0 6px 0;font-size:.78rem;color:var(--text2)">🧪 Baseline tests</h3>
+      <div class="opt-row"><input type="checkbox" id="optEnc"          checked><label for="optEnc">🔒 Encryption check</label></div>
+      <div class="opt-row"><input type="checkbox" id="optInjection"    checked><label for="optInjection">💉 Injection tests</label></div>
+      <div class="opt-row"><input type="checkbox" id="optCSWSH"        checked><label for="optCSWSH">🪪 CSWSH check</label></div>
+      <div class="opt-row"><input type="checkbox" id="optRateLimit"    checked><label for="optRateLimit">🚦 Rate limit check</label></div>
+      <div class="opt-row"><input type="checkbox" id="optMsgSize"      checked><label for="optMsgSize">📦 Message size check</label></div>
+      <div class="opt-row"><input type="checkbox" id="optInfoDisc"     checked><label for="optInfoDisc">🕳 Info disclosure check</label></div>
+      <div class="opt-row"><input type="checkbox" id="optGraphQL"      checked><label for="optGraphQL">🧩 GraphQL check</label></div>
+      <div class="opt-row"><input type="checkbox" id="optIDOR"         checked><label for="optIDOR">🪝 IDOR check</label></div>
+      <div class="opt-row"><input type="checkbox" id="optSubprotocol"  checked><label for="optSubprotocol">🔁 Subprotocol check</label></div>
+      <div class="opt-row"><input type="checkbox" id="optAuthBypass"          ><label for="optAuthBypass">🧱 Auth bypass check</label></div>
       <div class="divider"></div>
       <label style="font-size:.73rem;color:var(--text2)">Concurrent threads</label>
       <select id="concurrentCount">

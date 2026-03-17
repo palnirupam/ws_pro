@@ -24,3 +24,6 @@ test_results.txt
 
 # Runtime lock file (single-instance dashboard guard)
 .dashboard.lock
+
+# Local tooling / caches
+tools/__pycache__/

@@ -988,6 +988,19 @@ def run_scan(target_url: str, options: dict):
     run_ssti      = options.get('ssti', True)
     run_mass      = options.get('mass_assignment', True)
     run_logic     = options.get('business_logic', True)
+    # Baseline (previously always-on) tests — now user-controllable.
+    run_enc       = options.get('enc_check', True)
+    run_inj       = options.get('injection_tests', True)
+    run_cswsh     = options.get('cswsh_check', True)
+    run_rate      = options.get('rate_limit_check', True)
+    run_msg_size  = options.get('msg_size_check', True)
+    run_info_disc = options.get('info_disc_check', True)
+    run_graphql   = options.get('graphql_check', True)
+    run_idor      = options.get('idor_check', True)
+    run_subproto  = options.get('subproto_check', True)
+    # Auth bypass used to run only when fast_mode is OFF. Keep that as default,
+    # but allow explicit enabling via checkbox.
+    run_auth_bypass = options.get('auth_bypass', not fast_mode)
     concurrent    = min(int(options.get('concurrent_count', 5)), 10)
 
     try:
@@ -1066,17 +1079,25 @@ def run_scan(target_url: str, options: dict):
                 emit_log(f'  ⚠️ Fingerprint failed: {e}', 'warning')
 
             # Build test list as (label, factory) — factory creates fresh coroutine each call
-            tests = [
-                ('Encryption check',      lambda: test_encryption(ep)),
-                ('Injection tests',       lambda: run_injection_tests(ep, fast_mode=fast_mode)),
-                ('CSWSH check',           lambda: test_cswsh(ep)),
-                ('Rate limit check',      lambda: test_rate_limit(ep, fast_mode=fast_mode)),
-                ('Message size check',    lambda: test_message_size(ep)),
-                ('Info disclosure check', lambda: test_info_disclosure(ep)),
-                ('GraphQL check',         lambda: test_graphql(ep)),
-                ('IDOR check',            lambda: test_idor(ep)),
-                ('Subprotocol check',     lambda: test_subprotocol(ep)),
-            ]
+            tests = []
+            if run_enc:
+                tests.append(('Encryption check', lambda: test_encryption(ep)))
+            if run_inj:
+                tests.append(('Injection tests', lambda: run_injection_tests(ep, fast_mode=fast_mode)))
+            if run_cswsh:
+                tests.append(('CSWSH check', lambda: test_cswsh(ep)))
+            if run_rate:
+                tests.append(('Rate limit check', lambda: test_rate_limit(ep, fast_mode=fast_mode)))
+            if run_msg_size:
+                tests.append(('Message size check', lambda: test_message_size(ep)))
+            if run_info_disc:
+                tests.append(('Info disclosure check', lambda: test_info_disclosure(ep)))
+            if run_graphql:
+                tests.append(('GraphQL check', lambda: test_graphql(ep)))
+            if run_idor:
+                tests.append(('IDOR check', lambda: test_idor(ep)))
+            if run_subproto:
+                tests.append(('Subprotocol check', lambda: test_subprotocol(ep)))
 
             if run_race:
                 tests.append(('Race condition check',  lambda ep=ep: test_race_condition(ep, fast_mode=fast_mode)))
@@ -1089,7 +1110,7 @@ def run_scan(target_url: str, options: dict):
             if run_logic:
                 tests.append(('Business logic check',  lambda ep=ep: test_business_logic(ep, fast_mode=fast_mode)))
 
-            if not fast_mode:
+            if run_auth_bypass:
                 tests.append(('Auth bypass check', lambda: test_auth_bypass(ep)))
 
             if run_jwt:

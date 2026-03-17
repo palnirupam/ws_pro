@@ -383,6 +383,10 @@ WS_CORS_ORIGINS=http://localhost:5000,http://localhost:3000
 | 🔐 **Authentication** | Username+Password login, Bearer token, cookie, or custom headers for authenticated scans |
 | **Concurrent threads** | 3 (Safe) / 5 (Normal) / 10 (Aggressive) |
 
+**Attack controls (Dashboard):**
+- The dashboard exposes **per-attack checkboxes**, including the baseline checks (Encryption/Injection/CSWSH/RateLimit/MsgSize/InfoDisclosure/GraphQL/IDOR/Subprotocol) and **Auth bypass**.
+- Use **Select all / Clear all** in the Options panel to quickly enable/disable everything (useful for policy-safe scanning).
+
 ---
 
 ## 📊 Export Formats
@@ -464,6 +468,8 @@ taskkill /PID <PID> /F
 ```
 
 The mock server simulates 13 vulnerability scenarios including SQL injection, XSS, command injection, IDOR, JWT bypass, timing oracle, and more.
+
+It also includes **Mass Assignment** and **Business Logic** lab endpoints so those scanner modules can be validated locally.
 
 ### 🔐 Mock Lab: HTTP Login (for Username+Password auth)
 
