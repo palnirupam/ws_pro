@@ -328,6 +328,10 @@ When **Intercept Mode** is enabled, messages are marked **HELD** and appear in *
 - **Modify & Forward**: edit payload and send
 - **Drop**: discard the message (not forwarded)
 
+**Important notes (expected behavior):**
+- When **Intercept Mode** is ON, messages can be intentionally held, so the client/app may look like it’s **loading/stuck** until you click **Forward** or **Drop**.
+- Holding **SERVER→CLIENT** messages can block client UI updates. For safer first tests, start by intercepting workflows where you mainly need to tamper **CLIENT→SERVER** messages (the proxy can hold both directions).
+
 ### Replay
 - Each captured row has a **Replay** action.
 - Replay sends the payload back to the target **(client→server)** through the proxy.
