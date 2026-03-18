@@ -21,6 +21,7 @@ logs/
 
 # Local test outputs
 test_results.txt
+scan_out.txt
 
 # Runtime lock file (single-instance dashboard guard)
 .dashboard.lock
