@@ -27,6 +27,7 @@ from attacks.mass_assignment import test_mass_assignment
 from attacks.business_logic  import test_business_logic
 from utils.logger import log
 from core.auth_profile import auth_profile, reset_auth
+from core.oob_profile import oob_profile, reset_oob
 
 
 def print_banner():
@@ -66,6 +67,7 @@ def run_cli_scan(args):
 
         # Configure auth
         reset_auth()
+        reset_oob()
         if getattr(args, 'token', None):
             auth_profile.enabled = True
             auth_profile.method  = 'token'
@@ -99,6 +101,16 @@ def run_cli_scan(args):
                 login_loop.close()
         else:
             print('🔓 No auth — unauthenticated scan')
+
+        # Configure OOB proof (blind SSRF confirm)
+        if getattr(args, 'oob', None):
+            oob_profile.enabled = True
+            oob_profile.base_url = args.oob
+            oob_profile.api_key = getattr(args, 'oob_key', '') or ''
+            oob_profile.poll_enabled = not bool(getattr(args, 'no_oob_poll', False))
+            print('🛰️ OOB: enabled')
+        else:
+            oob_profile.enabled = False
 
         # 1. Discover endpoints
         print('🔍 Discovering endpoints...')
@@ -243,6 +255,10 @@ Examples:
     parser.add_argument('--token',    type=str, help='Bearer token')
     parser.add_argument('--cookie',   type=str, help='Session cookie string')
     parser.add_argument('--login-url',type=str, help='Login endpoint URL (optional)')
+
+    parser.add_argument('--oob', type=str, help='OOB server base URL (e.g. https://oob.example.com/)')
+    parser.add_argument('--oob-key', type=str, help='OOB API key (optional, sent as X-OOB-Key)')
+    parser.add_argument('--no-oob-poll', action='store_true', help='Do not poll OOB server to auto-confirm hits')
 
     args = parser.parse_args()
 

@@ -99,6 +99,23 @@
       <div id="apiKeyStatus">—</div>
     </div>
 
+    <div class="card" id="oobCard">
+      <h3>🛰️ OOB Proof (SSRF/XXE)</h3>
+      <div class="opt-row" style="margin-top:6px">
+        <input type="checkbox" id="optOOB">
+        <label for="optOOB">Enable OOB auto-confirm</label>
+      </div>
+      <input type="text" id="oobBaseUrl" placeholder="OOB Base URL (e.g. https://oob.example.com/)" autocomplete="off" spellcheck="false"/>
+      <input type="password" id="oobApiKey" placeholder="OOB API key (optional)" autocomplete="off" spellcheck="false"/>
+      <div class="opt-row" style="margin-top:6px">
+        <input type="checkbox" id="optOOBPoll" checked>
+        <label for="optOOBPoll">Poll OOB server for hits</label>
+      </div>
+      <div style="font-size:.71rem;color:var(--text3);margin-top:4px;line-height:1.3">
+        Self-host `oob_server.py` on a public domain/VPS to confirm blind SSRF.
+      </div>
+    </div>
+
     <div class="card">
       <h3>⚙️ Options</h3>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin:0 0 8px 0">

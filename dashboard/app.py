@@ -54,6 +54,7 @@ from attacks.business_logic  import test_business_logic
 from reports.generator import generate_html_report
 from utils.logger import log
 from core.auth_profile import auth_profile, reset_auth, AuthProfile
+from core.oob_profile import oob_profile, reset_oob
 from core.ws_proxy import WSProxyController, validate_ws_url
 import socket as _socket
 
@@ -359,6 +360,21 @@ def on_start_scan(data):
         emit_log(f'🔐 Auth configured: method={auth_method}', 'info')
     else:
         emit_log('🔓 No auth — unauthenticated scan', 'info')
+
+    # ── Configure OOB profile (blind SSRF/XXE proof) ───────────────────
+    reset_oob()
+    oob_data = options.get('oob', {}) or {}
+    try:
+        if oob_data.get('enabled'):
+            oob_profile.enabled = True
+            oob_profile.base_url = (oob_data.get('base_url') or '').strip()
+            oob_profile.api_key = (oob_data.get('api_key') or '').strip()
+            oob_profile.poll_enabled = bool(oob_data.get('poll', True))
+            emit_log('🛰️ OOB proof enabled (will auto-confirm blind SSRF where possible)', 'info')
+        else:
+            oob_profile.enabled = False
+    except Exception:
+        oob_profile.enabled = False
 
     scan_running = True
     scan_paused = False

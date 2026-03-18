@@ -1,0 +1,32 @@
+services:
+  dashboard:
+    build: .
+    container_name: ws_pro_dashboard
+    environment:
+      - WS_SECRET_KEY=${WS_SECRET_KEY:-}
+      - WS_CORS_ORIGINS=${WS_CORS_ORIGINS:-*}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./logs:/app/logs
+      - ./reports:/app/reports
+    restart: unless-stopped
+
+  oob:
+    build: .
+    container_name: ws_pro_oob
+    command: ["gunicorn", "-w", "2", "-b", "0.0.0.0:7000", "oob_server:app"]
+    environment:
+      - OOB_API_KEY=${OOB_API_KEY:-change-me}
+      - OOB_TOKEN_TTL_SECONDS=${OOB_TOKEN_TTL_SECONDS:-604800}
+      - OOB_RATE_LIMIT_PER_MIN=${OOB_RATE_LIMIT_PER_MIN:-120}
+      - OOB_MAX_BODY_BYTES=${OOB_MAX_BODY_BYTES:-4096}
+      - OOB_MAX_EVENTS_PER_TOKEN=${OOB_MAX_EVENTS_PER_TOKEN:-50}
+      - OOB_TRUST_PROXY=${OOB_TRUST_PROXY:-0}
+    ports:
+      - "7000:7000"
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped
+

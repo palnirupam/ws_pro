@@ -331,6 +331,17 @@ function getAuthData() {
   };
 }
 
+function getOobData() {
+  const enabled = !!document.getElementById('optOOB')?.checked;
+  if (!enabled) return {};
+  return {
+    enabled: true,
+    base_url:  document.getElementById('oobBaseUrl')?.value?.trim() || '',
+    api_key:   document.getElementById('oobApiKey')?.value?.trim() || '',
+    poll:      !!document.getElementById('optOOBPoll')?.checked,
+  };
+}
+
 socket.on('auth_test_result', d => {
   if (window._authTimeout) { clearTimeout(window._authTimeout); window._authTimeout = null; }
   const st  = document.getElementById('authStatus');
@@ -490,6 +501,7 @@ function startScan(resume = false) {
       auth_bypass:      document.getElementById('optAuthBypass').checked,
       concurrent_count: parseInt(document.getElementById('concurrentCount').value),
       auth:             getAuthData(),
+      oob:              getOobData(),
     }
   });
   addLog('🚀 Scan started: ' + url, 'info');

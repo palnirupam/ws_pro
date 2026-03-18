@@ -12,6 +12,9 @@
 
 **WS Tester Pro** is a professional-grade WebSocket penetration testing tool with a real-time dashboard. It discovers WebSocket endpoints, runs 25+ automated security tests, and generates OWASP-format reports — all from your browser or the command line.
 
+> **Docker is optional.** If you don't have Docker installed (e.g. you see: `docker : The term 'docker' is not recognized`), you can still run everything with **Python** using the **Installation** / **Quick Start** steps below.  
+> Docker/Compose is only for easy hosting (running Dashboard + OOB server together).
+
 ## 🎬 Features
 
 | Feature | Description |
@@ -366,6 +369,88 @@ ANTHROPIC_API_KEY=sk-ant-api03-your-key-here
 # CORS allowed origins (comma-separated, default: * for all)
 WS_CORS_ORIGINS=http://localhost:5000,http://localhost:3000
 ```
+
+---
+
+## 🛰️ OOB Proof (Blind SSRF/XXE Confirmation)
+
+WS Tester Pro supports **OOB proof** to confirm **blind SSRF** (and future OOB-style checks) using a self-hosted callback server.
+
+### Why OOB?
+Some vulnerabilities are **blind**: the target executes your payload, but does not return any visible data in the WebSocket response.  
+With OOB proof, the server makes a request to your callback URL, giving **strong, timestamped evidence**.
+
+### Self-host the OOB server (recommended for real-world use)
+
+The repo includes `oob_server.py` (HTTP callback server + events API).
+
+**Run locally (dev):**
+
+```bash
+export OOB_API_KEY="change-me"
+python3 oob_server.py
+```
+
+The callback endpoint is:
+- `GET/POST /c/<token>` (records hits)
+
+The polling API is:
+- `GET /api/events/<token>` (requires `X-OOB-Key: <OOB_API_KEY>` by default)
+
+**Important defaults (production-safe):**
+- `/api/*` is **locked by default** unless you set `OOB_API_OPEN=1` (not recommended on Internet)
+- events are persisted to `logs/oob_events.sqlite3`
+- old events are purged using `OOB_TOKEN_TTL_SECONDS` (default 7 days)
+- basic callback rate-limit by IP: `OOB_RATE_LIMIT_PER_MIN` (default 120/min)
+
+### Configure dashboard to use OOB
+In the sidebar:
+- Enable **🛰️ OOB Proof**
+- Set **OOB Base URL**: `https://oob.yourdomain.com/`
+- Set **OOB API key**: same value as `OOB_API_KEY`
+- Keep polling ON for auto-confirm
+
+### Configure CLI to use OOB
+
+```bash
+python3 main.py --target wss://example.com/ws --oob https://oob.yourdomain.com/ --oob-key change-me
+```
+
+---
+
+## 🐳 Docker (recommended for hosting)
+
+This project ships with `docker-compose.yml` to run both:
+- the Dashboard (port **5000**)
+- the OOB server (port **7000**)
+
+```bash
+# From repo root
+docker compose up -d --build
+```
+
+Common commands:
+
+```bash
+# View logs
+docker compose logs -f
+
+# Restart services
+docker compose restart
+
+# Stop (keep volumes)
+docker compose down
+```
+
+Open:
+- Dashboard: `http://localhost:5000`
+- OOB health: `http://localhost:7000/health`
+
+### Hosting notes (to avoid problems)
+- Put both services behind **HTTPS** using a reverse proxy (Nginx/Caddy/Traefik).
+- Keep `OOB_API_KEY` secret. Do not expose `/api/*` without auth.
+- Set `WS_CORS_ORIGINS` to your dashboard domain in production (avoid `*` if exposed publicly).
+- If running behind a proxy and you want correct client IPs in OOB logs, set `OOB_TRUST_PROXY=1`.
 
 ---
 

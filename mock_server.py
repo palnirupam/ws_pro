@@ -8,6 +8,7 @@ import time
 import base64
 import websockets
 import sys
+import os
 import threading
 import hmac as _hmac
 import hashlib as _hashlib
@@ -589,6 +590,25 @@ async def handler(websocket):
                 await websocket.send(json.dumps(resp))
                 continue
 
+            # ── SSRF lab endpoint (intentionally vulnerable) ───────────────────
+            if action in ('fetch', 'webhook', 'ping_server', 'download', 'check_status') or \
+               msg_type in ('fetch', 'test_webhook') or data.get('url') or data.get('webhook') or data.get('callback'):
+                target_url = data.get('url', data.get('webhook', data.get('callback', data.get('uri', data.get('href', '')))))
+                if target_url and target_url.startswith('http'):
+                    import urllib.request
+                    try:
+                        req = urllib.request.Request(target_url, headers={'User-Agent': 'MockServer-SSRF-Vuln'})
+                        with urllib.request.urlopen(req, timeout=2) as r:
+                            r.read()
+                        await websocket.send(json.dumps({
+                            'action': action, 'status': 'fetched', 'url': target_url
+                        }))
+                    except Exception as e:
+                        await websocket.send(json.dumps({
+                            'action': action, 'status': 'error fetching', 'url': target_url, 'error': str(e)
+                        }))
+                    continue
+
             # ── Custom header acknowledgment ──────────────────────────
             if msg_type == 'ping' or action == 'ping' or not action:
                 await websocket.send(json.dumps({
@@ -636,54 +656,25 @@ async def handler(websocket):
 
 
 async def main():
-    ws_host = '127.0.0.1'
+    # Bind WS on all interfaces so ws://localhost works on Windows
+    # even when localhost resolves to IPv6 (::1).
+    ws_host = None
     http_host = '127.0.0.1'
-    ws_port_base = 8765
-    http_port_base = 8766
 
-    def _start_http_on_free_port(start_port: int, host: str = '127.0.0.1', max_tries: int = 50) -> int:
-        for p in range(start_port, start_port + max_tries):
-            try:
-                t = threading.Thread(target=_start_http, args=(p, host), daemon=True)
-                t.start()
-                # If bind failed inside _start_http, thread will die quickly,
-                # but we don't want to depend on timing; probe by binding ourselves.
-                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                try:
-                    s.connect((host, p))
-                    return p
-                except OSError:
-                    # Not listening; try next port.
-                    continue
-                finally:
-                    try:
-                        s.close()
-                    except Exception:
-                        pass
-            except OSError:
-                continue
-        return start_port
+    # Tests and docs expect fixed defaults:
+    # - WebSocket: ws://localhost:8765
+    # - HTTP login: http://localhost:8766/api/login
+    #
+    # Allow overriding via env vars for local usage, but keep defaults stable.
+    ws_port = int((os.environ.get('MOCK_WS_PORT') or os.environ.get('WS_PORT') or '8765').strip())
+    http_port = int((os.environ.get('MOCK_HTTP_PORT') or os.environ.get('HTTP_PORT') or '8766').strip())
 
-    http_port = _start_http_on_free_port(http_port_base, host=http_host, max_tries=80)
+    # Start HTTP login server in background thread.
+    http_thread = threading.Thread(target=_start_http, args=(http_port, http_host), daemon=True)
+    http_thread.start()
 
-    ws_port = None
-    ws_server = None
-    last_err = None
-    for p in range(ws_port_base, ws_port_base + 120):
-        if p == http_port:
-            continue
-        try:
-            # IMPORTANT: Don't both "await" and "async with" the same Serve object.
-            # Start server by awaiting, then keep it running until shutdown.
-            ws_server = await websockets.serve(handler, ws_host, p, max_size=1024*1024)
-            ws_port = p
-            break
-        except OSError as e:
-            last_err = e
-            continue
-
-    if ws_port is None or ws_server is None:
-        raise last_err or OSError("Unable to bind WebSocket server")
+    # Start WebSocket server (fail fast if port is taken).
+    ws_server = await websockets.serve(handler, ws_host, ws_port, max_size=1024 * 1024)
 
     try:
         try:
@@ -692,28 +683,61 @@ async def main():
         except Exception:
             pass
 
-        banner = f"""
-╔═══════════════════════════════════════════════════════════╗
-║        WS Tester Pro — Vulnerable Lab Server              ║
-╠═══════════════════════════════════════════════════════════╣
-║  WebSocket:   ws://localhost:{ws_port:<5}                      ║
-║  HTTP Login:  http://localhost:{http_port:<5}/api/login          ║
-╠═══════════════════════════════════════════════════════════╣
-║  TEST USERS:                                              ║
-║    admin  / admin123   (role: admin)                      ║
-║    alice  / alice123   (role: user)                       ║
-║    bob    / bob123     (role: user)                       ║
-║    test   / test       (role: tester)                     ║
-╠═══════════════════════════════════════════════════════════╣
-║  HOW TO TEST AUTH IN DASHBOARD:                           ║
-║  1. Target: ws://localhost:{ws_port:<5}                      ║
-║  2. Auth → Username+Password                             ║
-║     user: admin   pass: admin123                         ║
-║     Login URL: http://localhost:{http_port:<5}/api/login          ║
-║  3. Click Test Auth → should show ✅                      ║
-║  4. Start Scan → authenticated findings!                  ║
-╚═══════════════════════════════════════════════════════════╝
-"""
+        # Try to enable ANSI colors on Windows CMD/PowerShell
+        if os.name == 'nt':
+            os.system('')
+
+        width = 68
+        C = "\033[36m"  # Cyan border
+        G = "\033[92m"  # Green success
+        Y = "\033[93m"  # Yellow titles
+        M = "\033[95m"  # Magenta highlights
+        R = "\033[0m"   # Reset
+        B = "\033[1m"   # Bold
+        D = "\033[90m"  # Dark gray
+        W = "\033[97m"  # White text
+
+        def box_line(text="", color=""):
+            visible_len = len(text)
+            padding = " " * ((width - 4) - visible_len)
+            content = f"{color}{text}{R}" if color else f"{W}{text}{R}"
+            return f"{C}║{R} {content}{padding} {C}║{R}"
+
+        def section(title):
+            return box_line(title, B+Y)
+
+        lines = [
+            f"{C}╔" + "═" * (width - 2) + f"╗{R}",
+            box_line("           WS Tester Pro — Vulnerable Lab Server", B+G),
+            f"{C}╠" + "═" * (width - 2) + f"╣{R}",
+            section(" [ ENDPOINTS ]"),
+            box_line(f"   > WebSocket:   ws://localhost:{ws_port}"),
+            box_line(f"   > HTTP Login:  http://localhost:{http_port}/api/login"),
+            f"{C}╠" + "═" * (width - 2) + f"╣{R}",
+            section(" [ TEST USERS ]"),
+            box_line("   > admin / admin123   (Role: admin)", G),
+            box_line("   > alice / alice123   (Role: user)"),
+            box_line("   > bob   / bob123     (Role: user)"),
+            box_line("   > test  / test       (Role: tester)", D),
+            f"{C}╠" + "═" * (width - 2) + f"╣{R}",
+            section(" [ HOW TO TEST AUTH (Dashboard) ]"),
+            box_line(f"   1. Target URL : ws://localhost:{ws_port}"),
+            box_line("   2. Auth Mode  : Username + Password"),
+            box_line("        - User: admin   |  Pass: admin123", M),
+            box_line(f"        - URL : http://localhost:{http_port}/api/login", M),
+            box_line("   3. Click 'Test Auth' to verify connection"),
+            f"{C}╠" + "═" * (width - 2) + f"╣{R}",
+            section(" [ HOW TO TEST OOB - BLIND SSRF ]"),
+            box_line("   1. Start OOB Server : python oob_server.py"),
+            box_line("   2. In Dashboard     : Enable 'OOB Proof'"),
+            box_line("        - Base URL: http://127.0.0.1:7000/", M),
+            box_line("        - API Key : change-me", M),
+            box_line("   3. For CLI Scans    :"),
+            box_line("        --oob http://127.0.0.1:7000/ --oob-key change-me", M),
+            f"{C}╚" + "═" * (width - 2) + f"╝{R}"
+        ]
+        banner = "\n" + "\n".join(lines) + "\n"
+
         try:
             print(banner)
         except UnicodeEncodeError:
@@ -722,6 +746,9 @@ async def main():
                 f"WebSocket:  ws://localhost:{ws_port}\n"
                 f"HTTP Login: http://localhost:{http_port}/api/login\n"
                 "Users: admin/admin123, alice/alice123, bob/bob123, test/test\n"
+                "OOB Testing:\n"
+                "  URL: http://127.0.0.1:7000/\n"
+                "  Key: change-me\n"
             )
 
         await asyncio.Future()
