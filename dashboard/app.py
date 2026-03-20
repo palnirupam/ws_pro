@@ -917,6 +917,34 @@ def on_load_session(data):
     else:
         emit_log('❌ Session not found', 'error')
 
+@socketio.on('delete_history')
+def on_delete_history(data):
+    """Delete multiple history items by their IDs, or clear all"""
+    global scan_history
+    
+    if data.get('all'):
+        original_len = len(scan_history)
+        scan_history.clear()
+        emit_log(f'🗑️ Deleted all {original_len} history session{"s" if original_len != 1 else ""}', 'info')
+        on_get_history()
+        return
+
+    ids_to_delete = data.get('ids', [])
+    if not ids_to_delete:
+        return
+        
+    original_len = len(scan_history)
+    # Keep sessions not selected for deletion
+    scan_history = [s for s in scan_history if s.get('id') not in ids_to_delete]
+    
+    # Re-assign sequential IDs to keep list indexing correct for load_session
+    for idx, s in enumerate(scan_history):
+        s['id'] = idx
+        
+    deleted_count = original_len - len(scan_history)
+    emit_log(f'🗑️ Deleted {deleted_count} history session{"s" if deleted_count != 1 else ""}', 'info')
+    on_get_history()
+
 
 @socketio.on('get_history')
 def on_get_history():

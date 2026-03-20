@@ -446,8 +446,9 @@
           </div>
         </div>
         <div style="display:flex;gap:8px;margin-top:8px">
-          <button class="btn btn-primary" onclick="runDiff()" style="width:auto;padding:7px 16px;font-size:.78rem">📊 Compare</button>
-          <button class="btn btn-secondary" onclick="runAutoDiff()" style="width:auto;padding:7px 16px;font-size:.78rem">🔄 Auto-Diff (connect with/without auth)</button>
+          <button id="compareBtn" class="btn btn-primary" onclick="runDiff()" style="width:auto;padding:7px 16px;font-size:.78rem;transition:transform 0.2s ease">📊 Compare</button>
+          <button id="autoDiffBtn" class="btn btn-secondary" onclick="runAutoDiff()" style="width:auto;padding:7px 16px;font-size:.78rem;transition:transform 0.2s ease">🔄 Auto-Diff (connect with/without auth)</button>
+          <button id="clearDiffBtn" class="btn btn-danger" onclick="clearDiffTool()" style="width:auto;padding:7px 16px;font-size:.78rem;transition:all 0.2s ease">🗑️ Clear All</button>
         </div>
       </div>
       <div id="diffResult" style="display:none">
@@ -480,6 +481,16 @@
     <!-- Pane: History -->
     <div class="tab-pane" id="pane-history">
       <h3 style="color:var(--blue);font-size:.85rem;margin-bottom:10px">📂 Scan History</h3>
+      <div id="historyToolbar" class="findings-toolbar" style="display:none; justify-content:space-between; margin-bottom:12px; background:var(--bg2); padding:8px 12px; border-radius:8px; border:1px solid var(--border)">
+        <div class="opt-row" style="padding:0">
+          <input type="checkbox" id="historySelectAll" onchange="toggleSelectAllHistory(this)" style="cursor:pointer;width:15px;height:15px;accent-color:var(--blue)">
+          <label for="historySelectAll" style="color:var(--text);font-weight:600;font-size:.78rem">Select All</label>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button id="historyDeleteAllBtn" class="btn btn-danger btn-sm" style="transition:transform 0.2s ease" onclick="deleteAllHistory()">🗑️ Delete All</button>
+          <button id="historyDeleteBtn" class="btn btn-danger btn-sm" style="display:none; transition:transform 0.2s ease" onclick="deleteSelectedHistory()">🗑️ Delete</button>
+        </div>
+      </div>
       <div id="historyList">
         <div class="empty-state"><div class="icon">📂</div><p>No saved sessions yet. Save a session after scanning.</p></div>
       </div>
@@ -499,6 +510,20 @@
 
 <!-- Socket.IO client (Flask-SocketIO does not serve /socket.io/socket.io.js) -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+
+<!-- Custom Animation Modal -->
+<div id="customConfirmModal" class="modal-overlay">
+  <div class="modal-box">
+    <div id="ccmIcon" class="modal-icon">⚠️</div>
+    <h3 id="ccmTitle" class="modal-title">Warning</h3>
+    <p id="ccmMsg" class="modal-msg">Are you sure?</p>
+    <div class="modal-actions">
+      <button id="ccmCancel" class="btn btn-secondary">Cancel</button>
+      <button id="ccmConfirm" class="btn btn-danger">Yes, Delete</button>
+    </div>
+  </div>
+</div>
+
 <script src="/static/js/app.js?v={{ js_v }}"></script>
 </body>
 </html>

@@ -212,6 +212,98 @@ socket.on('report_ready', d => {
 socket.on('session_saved', d => {
   addLog(`💾 Session #${d.id} saved (${d.total} findings)`, 'success');
 });
+let selectedHistoryIds = new Set();
+
+function toggleSelectAllHistory(cb) {
+  const checkboxes = document.querySelectorAll('.history-cb');
+  if (cb.checked) {
+    checkboxes.forEach(c => { c.checked = true; selectedHistoryIds.add(parseInt(c.value)); });
+  } else {
+    checkboxes.forEach(c => { c.checked = false; });
+    selectedHistoryIds.clear();
+  }
+  updateHistoryDeleteBtn();
+}
+
+function updateHistorySelection(cb, id) {
+  if (cb.checked) selectedHistoryIds.add(id);
+  else selectedHistoryIds.delete(id);
+  
+  const allCbs = document.querySelectorAll('.history-cb');
+  const selectAllCb = document.getElementById('historySelectAll');
+  if (selectAllCb) selectAllCb.checked = (selectedHistoryIds.size === allCbs.length && allCbs.length > 0);
+  
+  updateHistoryDeleteBtn();
+}
+
+function updateHistoryDeleteBtn() {
+  const btn = document.getElementById('historyDeleteBtn');
+  if (btn) {
+    if (selectedHistoryIds.size > 0) {
+      btn.style.display = 'inline-flex';
+      btn.textContent = `🗑️ Delete Selected (${selectedHistoryIds.size})`;
+    } else {
+      btn.style.display = 'none';
+    }
+  }
+}
+
+function deleteSelectedHistory() {
+  if (selectedHistoryIds.size === 0) return;
+  showConfirm(
+    'Delete History',
+    `Are you sure you want to permanently delete ${selectedHistoryIds.size} history session(s)?`,
+    'Yes, Delete',
+    () => {
+      const btn = document.getElementById('historyDeleteBtn');
+      if (btn) {
+        btn.style.transform = 'scale(0.92)';
+        setTimeout(() => { btn.style.transform = 'scale(1)'; }, 150);
+      }
+      socket.emit('delete_history', { ids: Array.from(selectedHistoryIds) });
+    }
+  );
+}
+
+function deleteAllHistory() {
+  showConfirm(
+    '⚠️ Delete ALL History',
+    'Are you sure you want to permanently delete ALL history sessions? This cannot be undone.',
+    'Yes, Delete All',
+    () => {
+      const btn = document.getElementById('historyDeleteAllBtn');
+      if (btn) {
+        btn.style.transform = 'scale(0.92)';
+        setTimeout(() => { btn.style.transform = 'scale(1)'; }, 150);
+      }
+      socket.emit('delete_history', { all: true });
+    }
+  );
+}
+
+function showConfirm(title, message, confirmText, onConfirm) {
+  const modal = document.getElementById('customConfirmModal');
+  if (!modal) return;
+  document.getElementById('ccmTitle').textContent = title;
+  document.getElementById('ccmMsg').textContent = message;
+  document.getElementById('ccmConfirm').textContent = confirmText;
+  
+  const cancelBtn = document.getElementById('ccmCancel');
+  const confirmBtn = document.getElementById('ccmConfirm');
+  
+  const newCancel = cancelBtn.cloneNode(true);
+  cancelBtn.parentNode.replaceChild(newCancel, cancelBtn);
+  const newConfirm = confirmBtn.cloneNode(true);
+  confirmBtn.parentNode.replaceChild(newConfirm, confirmBtn);
+  
+  newCancel.onclick = () => modal.classList.remove('active');
+  newConfirm.onclick = () => {
+    modal.classList.remove('active');
+    if (onConfirm) onConfirm();
+  };
+  
+  modal.classList.add('active');
+}
 
 socket.on('session_loaded', d => {
   findings = d.findings || [];
@@ -225,13 +317,31 @@ socket.on('session_loaded', d => {
 
 socket.on('history_list', list => {
   const el = document.getElementById('historyList');
-  if (!list.length) { el.innerHTML = '<p style="color:var(--text3);font-size:.78rem">No saved sessions</p>'; return; }
-  el.innerHTML = list.map(s => `
-    <div class="history-item" onclick="socket.emit('load_session',{id:${s.id}})">
-      <span class="history-target">${s.target}</span>
-      <span class="history-meta">#${s.id} · ${s.total} findings · ${new Date(s.timestamp).toLocaleString()}</span>
-    </div>
-  `).join('');
+  if (!el) return;
+  
+  selectedHistoryIds.clear();
+  const tb = document.getElementById('historyToolbar');
+  if (tb) tb.style.display = list.length > 0 ? 'flex' : 'none';
+  const sa = document.getElementById('historySelectAll');
+  if (sa) sa.checked = false;
+  updateHistoryDeleteBtn();
+
+  if (list.length === 0) {
+    el.innerHTML = `<div class="empty-state"><div class="icon">📂</div><p>No scan history available</p></div>`;
+    return;
+  }
+  let html = '';
+  list.slice().reverse().forEach(s => {
+    html += `
+    <div class="history-item" style="display:flex;align-items:center;gap:12px;cursor:default;">
+      <input type="checkbox" class="history-cb" value="${s.id}" onclick="updateHistorySelection(this, ${s.id})" style="width:16px;height:16px;accent-color:var(--blue);cursor:pointer;flex-shrink:0;">
+      <div style="flex:1;cursor:pointer" onclick="socket.emit('load_session',{id:${s.id}})">
+        <span class="history-target">${s.target}</span>
+        <span class="history-meta">#${s.id} · ${s.total} findings · ${new Date(s.timestamp).toLocaleString()}</span>
+      </div>
+    </div>`;
+  });
+  el.innerHTML = html;
 });
 
 socket.on('comparison_result', d => {
@@ -464,6 +574,8 @@ function selectAllAttacks(on) {
 }
 
 function startScan(resume = false) {
+  if (document.getElementById('scanBtn').disabled && !resume) return;
+
   const urlInput = document.getElementById('targetUrl');
   const url = urlInput.value.trim();
   if (!url) { 
@@ -1425,6 +1537,11 @@ socket.on('profile_saved', d => {
 
 /* ── Diff Tool (Mod #6) ────────────────────────────────────────── */
 function runDiff() {
+  const btn = document.getElementById('compareBtn');
+  if (btn) {
+    btn.style.transform = 'scale(0.92)';
+    setTimeout(() => { btn.style.transform = 'scale(1)'; }, 150);
+  }
   const a = document.getElementById('diffRespA')?.value || '';
   const b = document.getElementById('diffRespB')?.value || '';
   if (!a.trim() || !b.trim()) { addLog('⚠️ Enter both responses', 'warning'); return; }
@@ -1489,10 +1606,42 @@ function runDiff() {
 }
 
 function runAutoDiff() {
+  const btn = document.getElementById('autoDiffBtn');
+  if (btn) {
+    btn.style.transform = 'scale(0.92)';
+    setTimeout(() => { btn.style.transform = 'scale(1)'; }, 150);
+  }
   const target = document.getElementById('targetUrl')?.value?.trim();
   if (!target) { addLog('⚠️ Enter a target URL first', 'warning'); return; }
   socket.emit('auto_diff', { target, message: '{"type":"ping"}' });
   addLog('🔄 Running auto-diff (connect with/without auth)...', 'info');
+}
+
+
+
+function clearDiffTool() {
+  const btn = document.getElementById('clearDiffBtn');
+  if (btn) {
+    btn.style.transform = 'scale(0.92)';
+    setTimeout(() => {
+      btn.style.transform = 'scale(1)';
+    }, 150);
+  }
+
+  const a = document.getElementById('diffRespA');
+  const b = document.getElementById('diffRespB');
+  if (a) a.value = '';
+  if (b) b.value = '';
+  
+  const wrap = document.getElementById('diffResult');
+  if (wrap) wrap.style.display = 'none';
+  
+  const sum = document.getElementById('diffSummary');
+  const ana = document.getElementById('diffAnalysis');
+  const det = document.getElementById('diffDetails');
+  if (sum) sum.innerHTML = '';
+  if (ana) ana.innerHTML = '';
+  if (det) det.innerHTML = '';
 }
 
 // Populate textareas when backend returns auto-diff raw responses
