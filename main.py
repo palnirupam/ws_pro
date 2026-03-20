@@ -25,6 +25,9 @@ from attacks.ssrf            import test_ssrf
 from attacks.ssti            import test_ssti
 from attacks.mass_assignment import test_mass_assignment
 from attacks.business_logic  import test_business_logic
+from attacks.smuggling       import test_ws_smuggling
+from attacks.graphql_ws      import test_graphql_ws_attacks
+from core.cve_matcher        import check_and_report as check_cves
 from utils.logger import log
 from core.auth_profile import auth_profile, reset_auth
 from core.oob_profile import oob_profile, reset_oob
@@ -142,6 +145,9 @@ def run_cli_scan(args):
             info = loop.run_until_complete(fingerprint(ep))
             print(f'  Framework: {info["framework"]} | Server: {info["server_header"]}')
 
+            # CVE matching after fingerprint (Mod #4)
+            check_cves(ep, info['framework'], info.get('server_header'))
+
             tests = [
                 ('Encryption', lambda ep=ep: test_encryption(ep)),
                 ('Injection', lambda ep=ep: run_injection_tests(ep, fast_mode=fast_mode)),
@@ -157,6 +163,8 @@ def run_cli_scan(args):
                 ('SSTI', lambda ep=ep: test_ssti(ep, fast_mode=fast_mode)),
                 ('Mass Assignment', lambda ep=ep: test_mass_assignment(ep, fast_mode=fast_mode)),
                 ('Business Logic', lambda ep=ep: test_business_logic(ep, fast_mode=fast_mode)),
+                ('WS Smuggling', lambda ep=ep: test_ws_smuggling(ep, fast_mode=fast_mode)),
+                ('GraphQL WS', lambda ep=ep: test_graphql_ws_attacks(ep, fast_mode=fast_mode)),
             ]
 
             if not fast_mode:
@@ -260,6 +268,9 @@ Examples:
     parser.add_argument('--oob-key', type=str, help='OOB API key (optional, sent as X-OOB-Key)')
     parser.add_argument('--no-oob-poll', action='store_true', help='Do not poll OOB server to auto-confirm hits')
 
+    parser.add_argument('--fail-on', choices=['critical', 'high', 'medium', 'low'],
+                        help='Exit with code 1 if findings at this severity or above (for CI/CD)')
+
     args = parser.parse_args()
 
     print_banner()
@@ -283,6 +294,19 @@ Examples:
 
     store.on_finding(on_finding)
     run_cli_scan(args)
+
+    # CI/CD exit code (Mod #7)
+    if getattr(args, 'fail_on', None):
+        severity_order = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']
+        threshold = args.fail_on.upper()
+        threshold_idx = severity_order.index(threshold)
+        findings = store.all()
+        for f in findings:
+            if f.severity in severity_order:
+                if severity_order.index(f.severity) >= threshold_idx:
+                    print(f'\n[FAIL] Found {f.severity} finding: {f.title}')
+                    sys.exit(1)
+        print(f'\n[PASS] No findings at {threshold} or above')
 
 
 if __name__ == '__main__':

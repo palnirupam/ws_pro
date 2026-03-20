@@ -5,3 +5,5 @@ from attacks.ssrf            import test_ssrf
 from attacks.ssti            import test_ssti
 from attacks.mass_assignment import test_mass_assignment
 from attacks.business_logic  import test_business_logic
+from attacks.smuggling       import test_ws_smuggling
+from attacks.graphql_ws      import test_graphql_ws_attacks

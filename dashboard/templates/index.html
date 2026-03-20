@@ -154,6 +154,8 @@
             <div class="opt-row"><input type="checkbox" id="optSSTI"       checked><label for="optSSTI">📝 SSTI</label></div>
             <div class="opt-row"><input type="checkbox" id="optMassAssign" checked><label for="optMassAssign">🔓 Mass Assign</label></div>
             <div class="opt-row"><input type="checkbox" id="optLogic"      checked><label for="optLogic">🧠 Business Logic</label></div>
+            <div class="opt-row"><input type="checkbox" id="optSmuggling"  checked><label for="optSmuggling">🚇 WS Smuggling</label></div>
+            <div class="opt-row"><input type="checkbox" id="optGraphQLWS"  checked><label for="optGraphQLWS">📡 GraphQL WS</label></div>
             <div class="opt-row"><input type="checkbox" id="optFastMode"   checked><label for="optFastMode">⚡ Fast mode</label></div>
           </div>
         </div>
@@ -188,6 +190,65 @@
         <option value="10">10 — Aggressive</option>
       </select>
     </div>
+
+    <!-- ── Payload Wordlists (Mod #2) ──────────────────── -->
+    <details class="opts-acc">
+      <summary class="opts-summary">
+        <span>📝 Custom Payloads</span>
+        <span class="opts-chevron">▾</span>
+      </summary>
+      <div class="opts-acc-body">
+        <select id="payloadLibrary" onchange="loadPayloadLibrary()" style="margin-bottom:6px">
+          <option value="">— Select built-in library —</option>
+          <option value="sqli">💉 SQLi Payloads</option>
+          <option value="xss">🔥 XSS Payloads</option>
+          <option value="ssti">📝 SSTI Payloads</option>
+          <option value="ssrf">🌐 SSRF Payloads</option>
+          <option value="cmdi">💻 Command Injection</option>
+          <option value="nosql">🗂 NoSQL Injection</option>
+          <option value="fuzzing">🧨 Fuzzing Strings</option>
+        </select>
+        <textarea id="payloadTextarea"
+          placeholder="Paste custom payloads (one per line)...
+' OR '1'='1
+<script>alert(1)</script>
+{{7*7}}"
+          style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);
+                 padding:7px 10px;border-radius:7px;font-size:.74rem;font-family:monospace;
+                 resize:vertical;min-height:60px;outline:none;margin-bottom:5px"
+        ></textarea>
+        <input type="text" id="payloadTemplate" placeholder="Template: {{INJECT}} (default)" 
+               style="margin-bottom:5px;font-size:.74rem" />
+        <div style="display:flex;gap:5px">
+          <button class="btn btn-secondary" onclick="uploadPayloads()" style="font-size:.72rem;padding:5px 8px">📤 Upload</button>
+          <button class="btn btn-secondary" onclick="clearPayloads()" style="font-size:.72rem;padding:5px 8px">🗑 Clear</button>
+        </div>
+        <div id="payloadStatus" style="font-size:.7rem;color:var(--text3);margin-top:4px">No custom payloads loaded</div>
+      </div>
+    </details>
+
+    <!-- ── Scan Profiles (Mod #3) ──────────────────────── -->
+    <details class="opts-acc">
+      <summary class="opts-summary">
+        <span>📁 Scan Profiles</span>
+        <span class="opts-chevron">▾</span>
+      </summary>
+      <div class="opts-acc-body">
+        <select id="profileSelect" style="margin-bottom:6px">
+          <option value="">— Select profile —</option>
+          <option value="bug_bounty">🔥 Bug Bounty Quick</option>
+          <option value="deep_audit">🔍 Deep Audit</option>
+          <option value="ci_cd">🤖 CI/CD Safe</option>
+          <option value="jwt_focus">🔑 JWT Focus</option>
+        </select>
+        <div style="display:flex;gap:5px;margin-bottom:6px">
+          <button class="btn btn-secondary" onclick="loadProfile()" style="font-size:.72rem;padding:5px 8px">📂 Load</button>
+          <button class="btn btn-secondary" onclick="saveProfile()" style="font-size:.72rem;padding:5px 8px">💾 Save Current</button>
+        </div>
+        <input type="text" id="profileName" placeholder="Profile name (for save)" style="font-size:.74rem" />
+        <div id="profileStatus" style="font-size:.7rem;color:var(--text3);margin-top:4px"></div>
+      </div>
+    </details>
 
     <div class="divider"></div>
 
@@ -249,6 +310,7 @@
       <button class="tab"        onclick="showTab('bounty',this)">🎯 Bug Bounty</button>
       <button class="tab"        onclick="showTab('log',this)">📋 Live Log</button>
       <button class="tab"        onclick="showTab('interceptor',this)">🕵️ Interceptor</button>
+      <button class="tab"        onclick="showTab('diff',this)">📊 Diff Tool</button>
       <button class="tab"        onclick="showTab('ai',this)">🤖 AI Analysis</button>
       <button class="tab"        onclick="showTab('history',this)">📂 History</button>
     </div>
@@ -355,6 +417,45 @@
       <div id="heldWrap" style="display:none">
         <h3 class="held-title">⏸ Held Messages (Intercept Mode)</h3>
         <div id="heldList"></div>
+      </div>
+    </div>
+
+    <!-- Pane: Diff Tool (Mod #6) -->
+    <div class="tab-pane" id="pane-diff">
+      <div class="card" style="margin-bottom:12px">
+        <h3 style="color:var(--blue);font-size:.85rem;margin-bottom:8px">📊 WebSocket Response Diff Tool</h3>
+        <p style="color:var(--text2);font-size:.74rem;margin-bottom:10px">Compare two WebSocket responses to detect authorization bypasses and data leaks.</p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <div>
+            <label style="font-size:.72rem;color:var(--text2)">Response A (e.g. Unauthenticated)</label>
+            <textarea id="diffRespA"
+              placeholder='{"status":"ok","user":"guest"}'
+              style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);
+                     padding:7px 10px;border-radius:7px;font-size:.74rem;font-family:monospace;
+                     resize:vertical;min-height:100px;outline:none"
+            ></textarea>
+          </div>
+          <div>
+            <label style="font-size:.72rem;color:var(--text2)">Response B (e.g. Authenticated)</label>
+            <textarea id="diffRespB"
+              placeholder='{"status":"ok","user":"admin","token":"secret"}'
+              style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);
+                     padding:7px 10px;border-radius:7px;font-size:.74rem;font-family:monospace;
+                     resize:vertical;min-height:100px;outline:none"
+            ></textarea>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="btn btn-primary" onclick="runDiff()" style="width:auto;padding:7px 16px;font-size:.78rem">📊 Compare</button>
+          <button class="btn btn-secondary" onclick="runAutoDiff()" style="width:auto;padding:7px 16px;font-size:.78rem">🔄 Auto-Diff (connect with/without auth)</button>
+        </div>
+      </div>
+      <div id="diffResult" style="display:none">
+        <div class="card">
+          <h3 id="diffSummary" style="font-size:.82rem;margin-bottom:8px"></h3>
+          <div id="diffAnalysis" style="margin-bottom:10px"></div>
+          <div id="diffDetails" style="font-family:monospace;font-size:.75rem"></div>
+        </div>
       </div>
     </div>
 

@@ -21,6 +21,8 @@
 |---|---|
 | 🚀 **Auto Scanner** | Discovers WS endpoints & runs 25+ vulnerability tests |
 | 🔐 **Authenticated Scan** | Reuse login (token/cookie/headers) to scan protected WebSockets |
+| 📊 **Response Diff Tool** | Compare authenticated vs unauthenticated WebSocket responses to detect authorization bypass & data leaks |
+| 🔄 **Auto-Diff** | One-click automated dual-connection diffing — connects with & without auth, flags sensitive field leaks |
 | 🎯 **Bug Bounty Mode** | One-click copy of HackerOne/Bugcrowd-ready markdown reports |
 | 📄 **Multi-Format Reports** | PDF, HTML, JSON, and SARIF (CI/CD) export |
 | 🤖 **AI Analysis** | Anthropic Claude integration for attack chain analysis |
@@ -38,11 +40,29 @@
 
 ## 📸 Screenshots
 
-![Dashboard — Scan Results](docs/dashboard.png)
-*Live scan results showing discovered vulnerabilities with severity ratings and CVSS scores.*
+### 🔍 Scan Results — Findings Tab
+![Findings — Vulnerability Scan Results](docs/screenshots/findings.png)
+*452 vulnerabilities discovered with severity breakdown: 128 Critical, 205 High, 98 Medium, 21 Low.*
 
-![Interceptor View](docs/interceptor.png)
-*Real-time traffic interceptor with search, filter, and export capabilities.*
+### 🎯 Bug Bounty Report Generator
+![Bug Bounty — One-Click Reports](docs/screenshots/bug_bounty.png)
+*Copy HackerOne/Bugcrowd-ready markdown reports with one click — each finding includes CVSS scores, reproduction steps, and remediation.*
+
+### 📡 Live Scan Log
+![Live Log — Real-Time Activity](docs/screenshots/live_log.png)
+*Real-time scan activity with color-coded severity levels, timestamps, and module-by-module progress tracking.*
+
+### 🕵️ MITM Interceptor
+![Interceptor — WebSocket Proxy](docs/screenshots/interceptor.png)
+*WebSocket man-in-the-middle proxy with traffic capture, search, filter, hold/forward/drop, and replay capabilities.*
+
+### 📊 Auto-Diff — Bypass Detection
+![Auto-Diff — CRITICAL Bypass](docs/screenshots/auto_diff_bypass_detection.png)
+*Auto-Diff detecting CRITICAL authorization bypass: 11 sensitive fields leaked including API keys, admin panel paths, database URIs, and internal IPs.*
+
+### ✅ Auto-Diff — Clean Comparison
+![Auto-Diff — No Bypass](docs/screenshots/auto_diff_results.png)
+*Authenticated vs unauthenticated response comparison — no bypass detected when the server correctly enforces authorization.*
 
 ## 📁 Project Structure
 
@@ -72,8 +92,15 @@ ws_pro/
 │       ├── css/app.css     # Styling (dark/light themes, responsive)
 │       └── js/app.js       # Frontend logic
 ├── docs/
-│   ├── dashboard.png        # Screenshot
-│   └── interceptor.png      # Screenshot
+│   ├── dashboard.png              # Legacy screenshot
+│   ├── interceptor.png            # Legacy screenshot
+│   └── screenshots/
+│       ├── findings.png                   # Findings tab with scan results
+│       ├── bug_bounty.png                 # Bug Bounty report generator
+│       ├── live_log.png                   # Live scan activity log
+│       ├── interceptor.png                # MITM proxy UI
+│       ├── auto_diff_bypass_detection.png # Auto-Diff CRITICAL bypass demo
+│       └── auto_diff_results.png          # Auto-Diff clean result demo
 ├── logs/                    # Runtime logs (created locally)
 ├── reports/
 │   ├── generator.py        # HTML report generator (browser view)
@@ -87,7 +114,7 @@ ws_pro/
 │   ├── evidence.py         # Evidence data collector
 │   └── logger.py           # File + console logging
 ├── main.py                 # CLI entry point (argparse)
-├── mock_server.py          # Vulnerable test server (13 scenarios)
+├── mock_server.py          # Vulnerable test server (15+ scenarios, auth-aware responses)
 ├── test_ui.py              # UI smoke checks (local)
 ├── test_ws.py              # WebSocket connectivity checks (local)
 ├── .env.example            # Environment configuration template
@@ -258,7 +285,7 @@ python main.py --dashboard
    - Custom headers
 3. Configure scan options (Fast mode, JWT attacks, Timing, etc.)
 4. Click **▶ Start Scan** (or press `Ctrl+Enter`)
-5. View results in tabs: Findings | Bug Bounty | Live Log | Interceptor | AI Analysis | History
+5. View results in tabs: Findings | Bug Bounty | Live Log | Interceptor | **Diff Tool** | AI Analysis | History
 6. Export reports: **📄 Download PDF** (hover for more formats: HTML, SARIF, JSON)
 
 ### 💡 Example Penetration Testing Session
@@ -339,6 +366,64 @@ When **Intercept Mode** is enabled, messages are marked **HELD** and appear in *
 - Each captured row has a **Replay** action.
 - Replay sends the payload back to the target **(client→server)** through the proxy.
 - “System/error” rows (e.g. target unreachable) don’t contain real payloads and can’t be replayed.
+
+---
+
+## 📊 Response Diff Tool
+
+The **Diff Tool** tab lets you compare two WebSocket responses side by side to detect **authorization bypass** and **sensitive data leakage** — a critical check during pen testing.
+
+### Manual Compare
+
+1. Open the **Diff Tool** tab
+2. Paste an **unauthenticated** WebSocket response into **Response A**
+3. Paste an **authenticated** WebSocket response into **Response B**
+4. Click **🔒 Compare**
+
+The tool will:
+- Parse both JSON responses
+- Highlight **added**, **removed**, and **changed** fields
+- Flag **sensitive fields** (`password`, `token`, `role`, `email`, `balance`, `session`, `api_key`, `internal_ip`)
+- Show a **CRITICAL** banner if an authorization bypass is detected
+
+### Auto-Diff (One-Click)
+
+The **Auto-Diff** button automates the entire process:
+
+1. Enter a **target WebSocket URL** in the sidebar (e.g. `ws://localhost:8765`)
+2. Go to **Diff Tool** tab
+3. Click **🔄 Auto-Diff (connect with/without auth)**
+
+The backend will:
+- Connect to the target **without authentication** → capture Response A
+- Obtain a JWT token from the login endpoint (port + 1)
+- Connect **with the auth token** → capture Response B
+- Perform a field-by-field JSON diff
+- Display the results with bypass severity analysis
+
+**Example output (against mock server):**
+
+```
+🔓 CRITICAL — Authorization Bypass Detected
+Response B contains 11 extra fields not in Response A.
+Sensitive fields: admin_panel, api_key, balance, email, role, session, token
+
++ admin_panel: "/admin/dashboard"
++ api_key: "sk-live-4f3a8b2c1d0e9f7a6b5c4d3e2f1a0b9c"
++ balance: 9999
++ database: "mongodb://prod-db:27017/users"
++ email: "admin@corp.com"
++ internal_ip: "10.0.0.42"
++ permissions: ["read", "write", "delete", "admin"]
++ role: "admin"
++ session: "sess_abc123"
++ token: "eyJhbGciOiJIUzI1NiIs..."
++ user: "admin"
+```
+
+![Auto-Diff Bypass Detection](docs/screenshots/auto_diff_bypass_detection.png)
+
+> **Use Case**: During a pentest, use Auto-Diff to quickly verify whether unauthenticated WebSocket connections can access authenticated-only data — a common vulnerability in real-world applications.
 
 ---
 
@@ -552,9 +637,9 @@ netstat -ano | findstr ":8766"
 taskkill /PID <PID> /F
 ```
 
-The mock server simulates 13 vulnerability scenarios including SQL injection, XSS, command injection, IDOR, JWT bypass, timing oracle, and more.
+The mock server simulates **15+ vulnerability scenarios** including SQL injection, XSS, command injection, IDOR, JWT bypass, timing oracle, and more.
 
-It also includes **Mass Assignment** and **Business Logic** lab endpoints so those scanner modules can be validated locally.
+It also includes **Mass Assignment**, **Business Logic**, and **Auth-Aware Response** lab endpoints — the ping/pong handler returns different response payloads for authenticated vs unauthenticated connections, enabling realistic testing of the **Diff Tool** and **Auto-Diff** features.
 
 ### 🔐 Mock Lab: HTTP Login (for Username+Password auth)
 

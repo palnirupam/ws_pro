@@ -449,10 +449,9 @@ function setProgress(pct, txt) {
 /* ── Scan ───────────────────────────────────────────────────── */
 function selectAllAttacks(on) {
   const ids = [
-    // main scan options
     'optAI', 'optPlaywright', 'optJWT', 'optTiming', 'optFuzzer',
     'optRace', 'optSSRF', 'optSSTI', 'optMassAssign', 'optLogic',
-    'optFastMode',
+    'optSmuggling', 'optGraphQLWS', 'optFastMode',
     // baseline tests
     'optEnc', 'optInjection', 'optCSWSH', 'optRateLimit', 'optMsgSize',
     'optInfoDisc', 'optGraphQL', 'optIDOR', 'optSubprotocol', 'optAuthBypass',
@@ -513,6 +512,8 @@ function startScan(resume = false) {
     idor_check:       document.getElementById('optIDOR').checked,
     subproto_check:   document.getElementById('optSubprotocol').checked,
     auth_bypass:      document.getElementById('optAuthBypass').checked,
+    smuggling:        document.getElementById('optSmuggling')?.checked ?? true,
+    graphql_ws:       document.getElementById('optGraphQLWS')?.checked ?? true,
     concurrent_count: parseInt(document.getElementById('concurrentCount').value),
     auth:             getAuthData(),
     oob:              getOobData(),
@@ -540,6 +541,8 @@ function startScan(resume = false) {
   if (opts.idor_check) enabled.push('IDOR');
   if (opts.subproto_check) enabled.push('Subprotocol');
   if (opts.auth_bypass) enabled.push('AuthBypass');
+  if (opts.smuggling) enabled.push('Smuggling');
+  if (opts.graphql_ws) enabled.push('GraphQL-WS');
 
   addLog(`🧩 Selected options: ${enabled.join(', ') || 'None'}`, 'info');
 
@@ -1300,13 +1303,250 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     exportFindings();
   }
-  // Tab shortcuts: 1-6
-  if (e.altKey && e.key >= '1' && e.key <= '6') {
+  // Tab shortcuts: 1-7
+  if (e.altKey && e.key >= '1' && e.key <= '7') {
     e.preventDefault();
-    const tabs = ['findings', 'bounty', 'log', 'interceptor', 'ai', 'history'];
+    const tabs = ['findings', 'bounty', 'log', 'interceptor', 'diff', 'ai', 'history'];
     const idx = parseInt(e.key) - 1;
     if (idx < tabs.length) {
       showTab(tabs[idx], document.querySelectorAll('.tab')[idx]);
     }
   }
+});
+
+/* ── Custom Payloads (Mod #2) ──────────────────────────────────── */
+function uploadPayloads() {
+  const raw = document.getElementById('payloadTextarea')?.value || '';
+  const template = document.getElementById('payloadTemplate')?.value || '{{INJECT}}';
+  if (!raw.trim()) { addLog('⚠️ Enter payloads first', 'warning'); return; }
+  socket.emit('upload_payloads', { payloads: raw, template });
+}
+
+function loadPayloadLibrary() {
+  const name = document.getElementById('payloadLibrary')?.value;
+  if (!name) return;
+  socket.emit('load_payload_library', { name });
+}
+
+function clearPayloads() {
+  document.getElementById('payloadTextarea').value = '';
+  document.getElementById('payloadTemplate').value = '';
+  socket.emit('clear_payloads');
+}
+
+socket.on('payloads_loaded', d => {
+  const st = document.getElementById('payloadStatus');
+  if (st) {
+    if (d.count > 0) {
+      st.textContent = `✅ ${d.count} payloads loaded${d.library ? ' (' + d.library + ')' : ''}`;
+      st.style.color = 'var(--green)';
+    } else {
+      st.textContent = 'No custom payloads loaded';
+      st.style.color = 'var(--text3)';
+    }
+  }
+});
+
+/* ── Scan Profiles (Mod #3) ────────────────────────────────────── */
+function loadProfile() {
+  const name = document.getElementById('profileSelect')?.value;
+  if (!name) { addLog('⚠️ Select a profile first', 'warning'); return; }
+  socket.emit('load_profile', { name });
+}
+
+function saveProfile() {
+  const name = document.getElementById('profileName')?.value?.trim();
+  if (!name) { addLog('⚠️ Enter a profile name', 'warning'); return; }
+
+  // Collect current scan options
+  const attacks = {
+    injection_tests: document.getElementById('optInjection')?.checked,
+    jwt:             document.getElementById('optJWT')?.checked,
+    cswsh_check:     document.getElementById('optCSWSH')?.checked,
+    ssrf:            document.getElementById('optSSRF')?.checked,
+    ssti:            document.getElementById('optSSTI')?.checked,
+    timing:          document.getElementById('optTiming')?.checked,
+    fuzzing:         document.getElementById('optFuzzer')?.checked,
+    race_condition:  document.getElementById('optRace')?.checked,
+    mass_assignment: document.getElementById('optMassAssign')?.checked,
+    business_logic:  document.getElementById('optLogic')?.checked,
+    smuggling:       document.getElementById('optSmuggling')?.checked,
+    graphql_ws:      document.getElementById('optGraphQLWS')?.checked,
+    enc_check:       document.getElementById('optEnc')?.checked,
+    rate_limit_check:document.getElementById('optRateLimit')?.checked,
+    msg_size_check:  document.getElementById('optMsgSize')?.checked,
+    info_disc_check: document.getElementById('optInfoDisc')?.checked,
+    graphql_check:   document.getElementById('optGraphQL')?.checked,
+    idor_check:      document.getElementById('optIDOR')?.checked,
+    subproto_check:  document.getElementById('optSubprotocol')?.checked,
+    auth_bypass:     document.getElementById('optAuthBypass')?.checked,
+  };
+
+  socket.emit('save_profile', {
+    name,
+    fast_mode: document.getElementById('optFastMode')?.checked,
+    threads:   parseInt(document.getElementById('concurrentCount')?.value) || 5,
+    attacks,
+  });
+}
+
+socket.on('profile_loaded', profile => {
+  const attacks = profile.attacks || {};
+  const map = {
+    injection_tests: 'optInjection', jwt: 'optJWT', cswsh_check: 'optCSWSH',
+    ssrf: 'optSSRF', ssti: 'optSSTI', timing: 'optTiming', fuzzing: 'optFuzzer',
+    race_condition: 'optRace', mass_assignment: 'optMassAssign', business_logic: 'optLogic',
+    smuggling: 'optSmuggling', graphql_ws: 'optGraphQLWS',
+    enc_check: 'optEnc', rate_limit_check: 'optRateLimit', msg_size_check: 'optMsgSize',
+    info_disc_check: 'optInfoDisc', graphql_check: 'optGraphQL', idor_check: 'optIDOR',
+    subproto_check: 'optSubprotocol', auth_bypass: 'optAuthBypass',
+  };
+  Object.entries(map).forEach(([key, id]) => {
+    const el = document.getElementById(id);
+    if (el) el.checked = !!attacks[key];
+  });
+  if (profile.fast_mode !== undefined) {
+    const fm = document.getElementById('optFastMode');
+    if (fm) fm.checked = !!profile.fast_mode;
+  }
+  if (profile.threads) {
+    const tc = document.getElementById('concurrentCount');
+    if (tc) tc.value = String(profile.threads);
+  }
+  const st = document.getElementById('profileStatus');
+  if (st) { st.textContent = `✅ Loaded: ${profile.name || 'profile'}`; st.style.color = 'var(--green)'; }
+  addLog(`📂 Profile loaded: ${profile.name || 'unknown'}`, 'success');
+});
+
+socket.on('profile_saved', d => {
+  const st = document.getElementById('profileStatus');
+  if (st) { st.textContent = `💾 Saved: ${d.name}`; st.style.color = 'var(--green)'; }
+});
+
+/* ── Diff Tool (Mod #6) ────────────────────────────────────────── */
+function runDiff() {
+  const a = document.getElementById('diffRespA')?.value || '';
+  const b = document.getElementById('diffRespB')?.value || '';
+  if (!a.trim() || !b.trim()) { addLog('⚠️ Enter both responses', 'warning'); return; }
+
+  // Client-side JSON diff — no backend round-trip needed
+  let objA, objB;
+  try { objA = JSON.parse(a); } catch(e) { objA = { raw: a }; }
+  try { objB = JSON.parse(b); } catch(e) { objB = { raw: b }; }
+
+  const allKeys = new Set([...Object.keys(objA), ...Object.keys(objB)]);
+  const added = [], removed = [], changed = [];
+  const sensitiveKeys = ['password','token','role','email','balance','session','secret','api_key','credit_card','ssn','admin'];
+
+  allKeys.forEach(k => {
+    if (!(k in objA) && (k in objB)) added.push({ path: k, value: JSON.stringify(objB[k]) });
+    else if ((k in objA) && !(k in objB)) removed.push({ path: k, value: JSON.stringify(objA[k]) });
+    else if (JSON.stringify(objA[k]) !== JSON.stringify(objB[k])) changed.push({ path: k, a: JSON.stringify(objA[k]), b: JSON.stringify(objB[k]) });
+  });
+
+  const sensitiveFound = added.filter(f => sensitiveKeys.some(s => f.path.toLowerCase().includes(s)));
+  const isBypass = sensitiveFound.length > 0 || added.length >= 3;
+
+  // Render results
+  const wrap = document.getElementById('diffResult');
+  const sum = document.getElementById('diffSummary');
+  const ana = document.getElementById('diffAnalysis');
+  const det = document.getElementById('diffDetails');
+  if (!wrap) return;
+  wrap.style.display = 'block';
+
+  sum.textContent = `📊 ${added.length} added, ${removed.length} removed, ${changed.length} changed`;
+  sum.style.color = isBypass ? 'var(--red)' : 'var(--green)';
+
+  if (isBypass) {
+    ana.innerHTML = `<div style="background:var(--red)11;border:1px solid var(--red)33;border-radius:8px;padding:10px;color:var(--red)">
+      <b>🔓 CRITICAL — Authorization Bypass Detected</b><br>
+      Response B contains ${added.length} extra fields not in Response A.
+      ${sensitiveFound.length ? '<br>Sensitive fields leaked: ' + sensitiveFound.map(f => f.path).join(', ') : ''}
+    </div>`;
+  } else {
+    ana.innerHTML = `<div style="background:var(--green)11;border:1px solid var(--green)33;border-radius:8px;padding:10px;color:var(--green)">
+      ✅ No authorization bypass detected — responses are similar
+    </div>`;
+  }
+
+  let html = '';
+  if (added.length) {
+    html += '<div style="margin:6px 0"><b style="color:var(--green)">➕ Added (only in B):</b></div>';
+    added.forEach(f => { html += `<div style="color:var(--green);padding:2px 8px">+ ${f.path}: ${f.value}</div>`; });
+  }
+  if (removed.length) {
+    html += '<div style="margin:6px 0"><b style="color:var(--red)">➖ Removed (only in A):</b></div>';
+    removed.forEach(f => { html += `<div style="color:var(--red);padding:2px 8px">- ${f.path}: ${f.value}</div>`; });
+  }
+  if (changed.length) {
+    html += '<div style="margin:6px 0"><b style="color:var(--yellow)">🔄 Changed:</b></div>';
+    changed.forEach(c => { html += `<div style="padding:2px 8px"><span style="color:var(--yellow)">${c.path}</span>: <span style="color:var(--red)">${c.a}</span> → <span style="color:var(--green)">${c.b}</span></div>`; });
+  }
+  if (!html) html = '<div style="color:var(--text3);padding:8px">Responses are identical</div>';
+  det.innerHTML = html;
+  addLog('📊 Diff complete — ' + (isBypass ? '🔓 BYPASS DETECTED!' : '✅ No bypass'), isBypass ? 'critical' : 'info');
+}
+
+function runAutoDiff() {
+  const target = document.getElementById('targetUrl')?.value?.trim();
+  if (!target) { addLog('⚠️ Enter a target URL first', 'warning'); return; }
+  socket.emit('auto_diff', { target, message: '{"type":"ping"}' });
+  addLog('🔄 Running auto-diff (connect with/without auth)...', 'info');
+}
+
+// Populate textareas when backend returns auto-diff raw responses
+socket.on('auto_diff_responses', d => {
+  const a = document.getElementById('diffRespA');
+  const b = document.getElementById('diffRespB');
+  if (a) a.value = d.response_a || '';
+  if (b) b.value = d.response_b || '';
+});
+
+socket.on('diff_result', d => {
+  const wrap = document.getElementById('diffResult');
+  const sum = document.getElementById('diffSummary');
+  const ana = document.getElementById('diffAnalysis');
+  const det = document.getElementById('diffDetails');
+  if (!wrap) return;
+  wrap.style.display = 'block';
+
+  const diff = d.diff || {};
+  const analysis = d.analysis || {};
+
+  sum.textContent = `📊 ${diff.summary || 'Diff complete'}`;
+  sum.style.color = analysis.is_bypass ? 'var(--red)' : 'var(--green)';
+
+  if (analysis.is_bypass) {
+    ana.innerHTML = `<div style="background:var(--red)11;border:1px solid var(--red)33;border-radius:8px;padding:10px;color:var(--red)">
+      <b>🔓 ${analysis.severity} — Authorization Bypass Detected</b><br>
+      ${analysis.description || ''}
+      ${analysis.sensitive_fields?.length ? '<br>Sensitive fields: ' + analysis.sensitive_fields.join(', ') : ''}
+    </div>`;
+  } else {
+    ana.innerHTML = `<div style="background:var(--green)11;border:1px solid var(--green)33;border-radius:8px;padding:10px;color:var(--green)">
+      ✅ No authorization bypass detected
+    </div>`;
+  }
+
+  let html = '';
+  if (diff.added?.length) {
+    html += '<div style="margin:6px 0"><b style="color:var(--green)">➕ Added:</b></div>';
+    diff.added.forEach(a => { html += `<div style="color:var(--green);padding:2px 8px">+ ${a.path}: ${a.value || ''}</div>`; });
+  }
+  if (diff.removed?.length) {
+    html += '<div style="margin:6px 0"><b style="color:var(--red)">➖ Removed:</b></div>';
+    diff.removed.forEach(r => { html += `<div style="color:var(--red);padding:2px 8px">- ${r.path}: ${r.value || ''}</div>`; });
+  }
+  if (diff.changed?.length) {
+    html += '<div style="margin:6px 0"><b style="color:var(--yellow)">🔄 Changed:</b></div>';
+    diff.changed.forEach(c => {
+      html += `<div style="padding:2px 8px"><span style="color:var(--yellow)">${c.path}</span>: `;
+      const keys = Object.keys(c).filter(k => k !== 'path');
+      html += keys.map(k => `<span style="color:var(--text2)">${k}=</span>${c[k]}`).join(' → ');
+      html += '</div>';
+    });
+  }
+  if (!html) html = '<div style="color:var(--text3);padding:8px">Responses are identical</div>';
+  det.innerHTML = html;
 });

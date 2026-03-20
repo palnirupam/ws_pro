@@ -51,10 +51,15 @@ from attacks.ssrf            import test_ssrf
 from attacks.ssti            import test_ssti
 from attacks.mass_assignment import test_mass_assignment
 from attacks.business_logic  import test_business_logic
+from attacks.smuggling       import test_ws_smuggling
+from attacks.graphql_ws      import test_graphql_ws_attacks
 from reports.generator import generate_html_report
 from utils.logger import log
+from utils.payload_store import payload_store
+from utils.diff_engine import diff_responses, analyze_auth_bypass
 from core.auth_profile import auth_profile, reset_auth, AuthProfile
 from core.oob_profile import oob_profile, reset_oob
+from core.cve_matcher import check_and_report as check_cves
 from core.ws_proxy import WSProxyController, validate_ws_url
 import socket as _socket
 
@@ -980,6 +985,289 @@ def on_import_findings(data):
     socketio.emit('scan_complete', {'count': len(store.all())})
 
 
+# ── Custom Payloads (Mod #2) ─────────────────────────────────────────────────
+
+@socketio.on('upload_payloads')
+def on_upload_payloads(data):
+    """Upload custom payloads for fuzzing"""
+    raw = data.get('payloads', '')
+    template = data.get('template', '{{INJECT}}')
+
+    if isinstance(raw, str):
+        payloads = [p.strip() for p in raw.splitlines() if p.strip()]
+    elif isinstance(raw, list):
+        payloads = [str(p).strip() for p in raw if str(p).strip()]
+    else:
+        emit_log('❌ Invalid payload format', 'error')
+        return
+
+    count = payload_store.set(payloads)
+    if template:
+        payload_store.set_template(template)
+
+    emit_log(f'📝 Loaded {count} custom payloads', 'success')
+    emit('payloads_loaded', {
+        'count': count,
+        'preview': payload_store.preview(5),
+        'template': payload_store.get_template(),
+    })
+
+
+@socketio.on('load_payload_library')
+def on_load_payload_library(data):
+    """Load a built-in payload library"""
+    name = (data.get('name') or '').strip().lower()
+    payloads = payload_store.load_library(name)
+    if payloads:
+        emit_log(f'📚 Loaded library: {name} ({len(payloads)} payloads)', 'success')
+        emit('payloads_loaded', {
+            'count': len(payloads),
+            'preview': payload_store.preview(5),
+            'library': name,
+        })
+    else:
+        emit_log(f'❌ Unknown library: {name}', 'error')
+
+
+@socketio.on('clear_payloads')
+def on_clear_payloads():
+    payload_store.clear()
+    emit_log('🗑️ Custom payloads cleared', 'info')
+    emit('payloads_loaded', {'count': 0, 'preview': [], 'library': ''})
+
+
+@socketio.on('get_payload_libraries')
+def on_get_payload_libraries():
+    """Return available built-in libraries"""
+    emit('payload_libraries', payload_store.available_libraries())
+
+
+@socketio.on('get_payload_status')
+def on_get_payload_status():
+    emit('payloads_loaded', {
+        'count': payload_store.count(),
+        'preview': payload_store.preview(5),
+        'library': payload_store.get_active_library(),
+        'template': payload_store.get_template(),
+    })
+
+
+# ── Scan Profiles (Mod #3) ───────────────────────────────────────────────────
+
+PROFILES_DIR = os.path.join(BASE_DIR, 'profiles')
+
+
+@socketio.on('save_profile')
+def on_save_profile(data):
+    """Save current scan configuration as a profile"""
+    name = (data.get('name') or '').strip()
+    if not name:
+        emit_log('❌ Profile name required', 'error')
+        return
+
+    safe_name = ''.join(c for c in name.lower().replace(' ', '_')
+                        if c.isalnum() or c == '_')
+    path = os.path.join(PROFILES_DIR, f'{safe_name}.json')
+
+    profile = {
+        'name': name,
+        'description': data.get('description', ''),
+        'fast_mode': data.get('fast_mode', False),
+        'threads': data.get('threads', 5),
+        'attacks': data.get('attacks', {}),
+        'auth': data.get('auth', {'enabled': False}),
+        'oob': data.get('oob', {'enabled': False}),
+    }
+
+    try:
+        os.makedirs(PROFILES_DIR, exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(profile, f, indent=4)
+        emit_log(f'💾 Profile saved: {name}', 'success')
+        emit('profile_saved', {'name': name, 'file': f'{safe_name}.json'})
+    except Exception as e:
+        emit_log(f'❌ Failed to save profile: {e}', 'error')
+
+
+@socketio.on('load_profile')
+def on_load_profile(data):
+    """Load a scan profile"""
+    name = (data.get('name') or '').strip()
+    safe_name = ''.join(c for c in name.lower().replace(' ', '_')
+                        if c.isalnum() or c == '_')
+    path = os.path.join(PROFILES_DIR, f'{safe_name}.json')
+
+    if not os.path.isfile(path):
+        # Try exact filename match
+        path = os.path.join(PROFILES_DIR, name if name.endswith('.json') else f'{name}.json')
+
+    if not os.path.isfile(path):
+        emit_log(f'❌ Profile not found: {name}', 'error')
+        return
+
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            profile = json.load(f)
+        emit_log(f'📂 Profile loaded: {profile.get("name", name)}', 'success')
+        emit('profile_loaded', profile)
+    except Exception as e:
+        emit_log(f'❌ Failed to load profile: {e}', 'error')
+
+
+@socketio.on('list_profiles')
+def on_list_profiles():
+    """List available scan profiles"""
+    profiles = []
+    if os.path.isdir(PROFILES_DIR):
+        for f in sorted(os.listdir(PROFILES_DIR)):
+            if f.endswith('.json'):
+                try:
+                    with open(os.path.join(PROFILES_DIR, f), 'r', encoding='utf-8') as fh:
+                        data = json.load(fh)
+                    profiles.append({
+                        'file': f,
+                        'name': data.get('name', f),
+                        'description': data.get('description', ''),
+                    })
+                except Exception:
+                    profiles.append({'file': f, 'name': f, 'description': '(invalid)'})
+    emit('profiles_list', profiles)
+
+
+@socketio.on('delete_profile')
+def on_delete_profile(data):
+    """Delete a saved profile"""
+    name = (data.get('name') or '').strip()
+    safe_name = ''.join(c for c in name.lower().replace(' ', '_')
+                        if c.isalnum() or c == '_')
+    path = os.path.join(PROFILES_DIR, f'{safe_name}.json')
+
+    # Don't allow deleting built-in profiles
+    builtins = {'bug_bounty.json', 'deep_audit.json', 'ci_cd.json', 'jwt_focus.json'}
+    if os.path.basename(path) in builtins:
+        emit_log('⚠️ Cannot delete built-in profile', 'warning')
+        return
+
+    if os.path.isfile(path):
+        os.remove(path)
+        emit_log(f'🗑️ Profile deleted: {name}', 'info')
+        on_list_profiles()  # Refresh list
+    else:
+        emit_log(f'❌ Profile not found: {name}', 'error')
+
+
+# ── WebSocket Diff Tool (Mod #6) ─────────────────────────────────────────────
+
+@socketio.on('run_diff')
+def on_run_diff(data):
+    """Compare two WebSocket responses"""
+    resp_a = (data.get('response_a') or '').strip()
+    resp_b = (data.get('response_b') or '').strip()
+    label_a = data.get('label_a', 'Response A')
+    label_b = data.get('label_b', 'Response B')
+
+    if not resp_a or not resp_b:
+        emit_log('❌ Both responses required for diff', 'error')
+        return
+
+    result = diff_responses(resp_a, resp_b, label_a, label_b)
+    analysis = analyze_auth_bypass(result)
+
+    emit('diff_result', {
+        'diff': result,
+        'analysis': analysis,
+    })
+
+    if analysis.get('is_bypass'):
+        emit_log(
+            f'🔓 Auth bypass detected: {analysis["description"][:100]}',
+            'error' if analysis['severity'] in ('CRITICAL', 'HIGH') else 'warning'
+        )
+    else:
+        emit_log(f'📊 Diff complete: {result["summary"]}', 'info')
+
+
+@socketio.on('auto_diff')
+def on_auto_diff(data):
+    """Auto-diff: connect with and without auth, compare responses"""
+    target = (data.get('target') or '').strip()
+    message = data.get('message', '{"type":"ping"}')
+
+    if not target:
+        emit_log('❌ Target URL required', 'error')
+        return
+
+    try:
+        from core.scanner import ws_connect, send_recv
+
+        # Response without auth
+        emit_log('🔌 Connecting without auth...', 'info')
+        loop = asyncio.new_event_loop()
+        try:
+            async def _get_unauth():
+                from core.auth_profile import AuthProfile
+                tmp = AuthProfile()  # Empty auth
+                async with await ws_connect(target, timeout=5) as ws:
+                    return await send_recv(ws, message, timeout=3)
+            resp_noauth = loop.run_until_complete(_get_unauth()) or ''
+        finally:
+            loop.close()
+
+        # Response with auth
+        emit_log('🔐 Connecting with auth...', 'info')
+        loop = asyncio.new_event_loop()
+        try:
+            async def _get_auth():
+                async with await ws_connect(target, timeout=5) as ws:
+                    return await send_recv(ws, message, timeout=3)
+            resp_auth = loop.run_until_complete(_get_auth()) or ''
+        finally:
+            loop.close()
+
+        result = diff_responses(
+            resp_noauth, resp_auth,
+            'Unauthenticated', 'Authenticated'
+        )
+        analysis = analyze_auth_bypass(result)
+
+        emit('diff_result', {
+            'diff': result,
+            'analysis': analysis,
+            'response_a': resp_noauth[:1000],
+            'response_b': resp_auth[:1000],
+        })
+
+        if analysis.get('is_bypass'):
+            from core.findings import store as fs
+            from utils.evidence import Evidence
+            ev = Evidence.make(
+                proof=analysis['description'],
+                reproduce=(
+                    f"1. Connect to {target} without auth\n"
+                    f"2. Send: {message}\n"
+                    f"3. Compare response with authenticated one\n"
+                    f"4. Sensitive fields accessible without auth"
+                )
+            )
+            fs.add(target, 'Authorization Bypass via WebSocket Diff', analysis['severity'],
+                analysis['description'], ev)
+            emit_log(f'🔓 Auth bypass finding added ({analysis["severity"]})', 'error')
+        else:
+            emit_log(f'📊 Auto-diff complete: {result["summary"]}', 'info')
+
+    except Exception as e:
+        emit_log(f'❌ Auto-diff failed: {e}', 'error')
+
+
+# ── CVE Database Info (Mod #4) ────────────────────────────────────────────────
+
+@socketio.on('get_cve_stats')
+def on_get_cve_stats():
+    """Return CVE database statistics"""
+    from core.cve_matcher import get_stats
+    emit('cve_stats', get_stats())
+
+
 # ── Async helper ──────────────────────────────────────────────────────────────
 def _run_async(coro):
     """Run a coroutine safely from a synchronous thread using a fresh event loop."""
@@ -1091,6 +1379,8 @@ def run_scan(target_url: str, options: dict):
             try:
                 info = _run_async(fingerprint(ep))
                 emit_log(f'  Framework: {info["framework"]} | Server: {info["server_header"]}', 'info')
+                # CVE matching after fingerprint (Mod #4)
+                check_cves(ep, info['framework'], info.get('server_header'))
             except Exception as e:
                 emit_log(f'  ⚠️ Fingerprint failed: {e}', 'warning')
 
@@ -1126,6 +1416,14 @@ def run_scan(target_url: str, options: dict):
             if run_logic:
                 tests.append(('Business logic check',  lambda ep=ep: test_business_logic(ep, fast_mode=fast_mode)))
 
+            run_smuggling = options.get('smuggling', True)
+            run_graphql_ws = options.get('graphql_ws', True)
+
+            if run_smuggling:
+                tests.append(('WS Smuggling',  lambda ep=ep: test_ws_smuggling(ep, fast_mode=fast_mode)))
+            if run_graphql_ws:
+                tests.append(('GraphQL WS attacks',  lambda ep=ep: test_graphql_ws_attacks(ep, fast_mode=fast_mode)))
+
             if run_auth_bypass:
                 tests.append(('Auth bypass check', lambda: test_auth_bypass(ep)))
 
@@ -1136,7 +1434,13 @@ def run_scan(target_url: str, options: dict):
                 tests.append(('Timing attacks', lambda: test_timing(ep, fast_mode=fast_mode)))
 
             if run_fuzzer_:
-                tests.append(('WebSocket fuzzing', lambda: test_fuzzing(ep, fast_mode=fast_mode)))
+                _custom = payload_store.get()
+                _tmpl = payload_store.get_template()
+                tests.append(('WebSocket fuzzing', lambda: test_fuzzing(
+                    ep, fast_mode=fast_mode,
+                    custom_payloads=_custom or None,
+                    custom_template=_tmpl if _custom else None,
+                )))
 
             for label, coro_factory in tests:
                 if not scan_running:
@@ -1206,6 +1510,138 @@ def run_scan(target_url: str, options: dict):
         scan_running = False
         socketio.emit('scan_complete', {'count': len(store.all())})
         socketio.emit('status', {'status': 'complete'})
+
+
+# ── Auto-Diff Handler ─────────────────────────────────────────────────────────
+@socketio.on('auto_diff')
+def on_auto_diff(data):
+    """Connect to target WS twice (no auth / with auth), compare responses."""
+    import websockets
+    target = data.get('target', '').strip()
+    message = data.get('message', '{"type":"ping"}')
+
+    if not target:
+        emit_log('⚠️ Enter a target URL first', 'warning')
+        return
+
+    emit_log(f'🔄 Auto-Diff: connecting to {target} (no auth)...', 'info')
+
+    async def _fetch_response(url, headers=None):
+        """Connect, send message, return first response."""
+        try:
+            extra = {}
+            if headers:
+                extra['additional_headers'] = headers
+            async with websockets.connect(url, open_timeout=5, close_timeout=2, **extra) as ws:
+                # Read welcome message if any
+                try:
+                    welcome = await asyncio.wait_for(ws.recv(), timeout=2)
+                except Exception:
+                    welcome = None
+                # Send our probe message
+                await ws.send(message)
+                try:
+                    resp = await asyncio.wait_for(ws.recv(), timeout=3)
+                except Exception:
+                    resp = welcome or ''
+                return str(resp)
+        except Exception as e:
+            return json.dumps({"error": str(e)})
+
+    async def _run_auto_diff():
+        # 1. Connect WITHOUT auth
+        resp_a = await _fetch_response(target)
+
+        # 2. Try to get auth token from mock login
+        auth_headers = {}
+        try:
+            # Extract host/port from ws URL for login endpoint
+            import urllib.parse
+            parsed = urllib.parse.urlparse(target)
+            host = parsed.hostname or 'localhost'
+            port = parsed.port or 8765
+            login_port = port + 1  # Convention: login on WS port + 1
+            login_url = f'http://{host}:{login_port}/login'
+
+            import urllib.request
+            req_data = json.dumps({"username": "admin", "password": "admin123"}).encode()
+            req = urllib.request.Request(login_url, data=req_data,
+                                         headers={'Content-Type': 'application/json'})
+            with urllib.request.urlopen(req, timeout=3) as r:
+                login_resp = json.loads(r.read().decode())
+                token = login_resp.get('token', '')
+                if token:
+                    auth_headers['Authorization'] = f'Bearer {token}'
+        except Exception:
+            # If login fails, just add a fake auth header to see different response
+            auth_headers['Authorization'] = 'Bearer test_token_admin'
+
+        emit_log(f'🔄 Auto-Diff: connecting with auth...', 'info')
+
+        # 3. Connect WITH auth
+        resp_b = await _fetch_response(target, auth_headers)
+
+        # Populate textareas on frontend
+        socketio.emit('auto_diff_responses', {
+            'response_a': resp_a,
+            'response_b': resp_b,
+        })
+
+        # 4. Diff the responses
+        try:
+            obj_a = json.loads(resp_a)
+        except Exception:
+            obj_a = {"raw": resp_a}
+        try:
+            obj_b = json.loads(resp_b)
+        except Exception:
+            obj_b = {"raw": resp_b}
+
+        all_keys = set(list(obj_a.keys()) + list(obj_b.keys()))
+        added, removed, changed = [], [], []
+        sensitive_keys = ['password','token','role','email','balance','session',
+                          'secret','api_key','credit_card','ssn','admin']
+
+        for k in sorted(all_keys):
+            if k not in obj_a and k in obj_b:
+                added.append({'path': k, 'value': json.dumps(obj_b[k])})
+            elif k in obj_a and k not in obj_b:
+                removed.append({'path': k, 'value': json.dumps(obj_a[k])})
+            elif json.dumps(obj_a.get(k)) != json.dumps(obj_b.get(k)):
+                changed.append({'path': k, 'a': json.dumps(obj_a.get(k)), 'b': json.dumps(obj_b.get(k))})
+
+        sensitive_found = [f for f in added if any(s in f['path'].lower() for s in sensitive_keys)]
+        is_bypass = len(sensitive_found) > 0 or len(added) >= 3
+
+        diff_data = {
+            'summary': f'{len(added)} added, {len(removed)} removed, {len(changed)} changed',
+            'added': added,
+            'removed': removed,
+            'changed': changed,
+        }
+        analysis_data = {
+            'is_bypass': is_bypass,
+            'severity': 'CRITICAL' if is_bypass else 'INFO',
+            'description': f'Response B contains {len(added)} extra fields not in Response A.' if is_bypass else 'Responses are similar.',
+            'sensitive_fields': [f['path'] for f in sensitive_found],
+        }
+
+        socketio.emit('diff_result', {'diff': diff_data, 'analysis': analysis_data})
+        emoji = '🔓' if is_bypass else '✅'
+        emit_log(f'{emoji} Auto-Diff complete: {diff_data["summary"]}', 'critical' if is_bypass else 'info')
+
+    # Run in thread with fresh event loop
+    def _thread():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(_run_auto_diff())
+        except Exception as e:
+            emit_log(f'❌ Auto-Diff error: {e}', 'error')
+        finally:
+            loop.close()
+
+    threading.Thread(target=_thread, daemon=True).start()
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────

@@ -107,16 +107,29 @@ SENSITIVE_LEAK_PATTERNS = [
 ]
 
 
-async def test_fuzzing(ws_url: str, fast_mode: bool = False) -> list:
+async def test_fuzzing(ws_url: str, fast_mode: bool = False,
+                       custom_payloads: list = None,
+                       custom_template: str = None) -> list:
     """
     WebSocket Fuzzer — sends malformed data to discover crashes,
     error leaks, and unexpected server behavior.
+    Supports custom payload wordlists via custom_payloads parameter.
+    Use custom_template with {{INJECT}} placeholder for structured injection.
     Returns list of confirmed finding types.
     """
     results = []
 
+    # ── Custom payload mode ───────────────────────────────────────────────
+    if custom_payloads:
+        template = custom_template or '{{INJECT}}'
+        payload_sets = [
+            ('Custom Payloads', [(
+                template.replace('{{INJECT}}', str(p)) if '{{INJECT}}' in template else str(p),
+                f'Custom: {str(p)[:40]}'
+            ) for p in custom_payloads]),
+        ]
     # Select payload sets based on mode
-    if fast_mode:
+    elif fast_mode:
         payload_sets = [
             ('Malformed JSON',     MALFORMED_JSON_PAYLOADS[:5]),
             ('Type Confusion',     TYPE_CONFUSION_PAYLOADS[:4]),

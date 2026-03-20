@@ -89,6 +89,8 @@ def generate_html_report(findings: list, target: str, ai_analysis: str = '') -> 
 
             <h4>🔧 Remediation</h4>
             <p class="rem-box">{rem}</p>
+
+            {'<h4>🛡️ CVE References</h4><div class="cve-box">' + html_lib.escape(str(ev.get('nvd_links',''))) .replace(chr(10),'<br>') + '<br><b>Top CVE:</b> ' + html_lib.escape(str(ev.get('top_cve',''))) + ' (CVSS ' + html_lib.escape(str(ev.get('top_cvss',''))) + ')  |  <b>Total matched:</b> ' + html_lib.escape(str(ev.get('cve_count',''))) + '</div>' if ev and ev.get('top_cve') else ''}
           </div>
         </div>"""
 
@@ -175,6 +177,7 @@ a{{color:#0066cc;text-decoration:none}}
 
 /* AI */
 .ai-box{{background:#f0f4ff;border-left:3px solid #6366f1;padding:14px;border-radius:0 8px 8px 0;font-size:.84rem;line-height:1.8;white-space:pre-wrap}}
+.cve-box{{background:#fff7ed;border-left:3px solid #f97316;padding:12px 14px;border-radius:0 8px 8px 0;font-size:.83rem;line-height:1.7}}
 .no-findings{{background:#f0fdf4;border:1px solid #22c55e44;border-radius:8px;padding:30px;text-align:center;color:#15803d;font-size:1rem}}
 
 /* Footer */

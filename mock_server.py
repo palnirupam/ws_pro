@@ -189,12 +189,16 @@ async def handler(websocket):
 
         is_auth = auth_method is not None
 
-        # Send welcome — more data for authenticated users
+        # Send welcome — includes framework fingerprint for CVE matching
         await websocket.send(json.dumps({
             'type':           'welcome',
             'message':        'Connected to VulnServer v3.2.1',
             'server':         'VulnServer',
             'version':        '3.2.1',
+            'framework':      'Engine.IO',
+            'framework_version': '4.1.0',
+            'engine':         'Socket.IO/4.5.0',
+            'powered_by':     'ws/8.2.0',
             'debug':          True,
             'authenticated':  is_auth,
             'auth_method':    auth_method,
@@ -231,6 +235,34 @@ async def handler(websocket):
                 }))
                 await websocket.close(1009, 'Message too big')
                 return
+
+            # ── SSTI vulnerability: template execution ────────────────
+            if '{{' in message and '}}' in message:
+                import re
+                tpl = message
+                # Simulate Jinja2/SSTI — evaluate simple expressions
+                for match in re.finditer(r'\{\{(.+?)\}\}', message):
+                    expr = match.group(1).strip()
+                    try:
+                        result = str(eval(expr, {'__builtins__': {}}, {'config': {'SECRET_KEY': 'super-secret-2024', 'DEBUG': True}}))
+                        tpl = tpl.replace(match.group(0), result)
+                    except Exception:
+                        tpl = tpl.replace(match.group(0), f'Error: {expr}')
+                await websocket.send(json.dumps({
+                    'output': tpl,
+                    'template_engine': 'jinja2',
+                    'evaluated': True,
+                }))
+                continue
+
+            # ── Fuzzer: format string vulnerability ───────────────────
+            if '%s' in message or '%x' in message or '%n' in message:
+                await websocket.send(json.dumps({
+                    'error': f'Format string processed: {message[:100]}',
+                    'leaked': '0x7fffffffde80 0x400 0x7ffff7a42300',
+                    'stack_info': 'Partial stack dump from format string',
+                }))
+                continue
 
             try:
                 data = json.loads(message)
@@ -369,9 +401,72 @@ async def handler(websocket):
             if msg_type == 'connection_init':
                 await websocket.send(json.dumps({
                     'type': 'connection_ack',
-                    'payload': {'graphql': True},
+                    'payload': {'graphql': True, 'server': 'graphql-ws/5.11.2'},
                 }))
                 continue
+
+            # ── GraphQL WS Subscription attacks (Mod #5) ─────────────
+            if msg_type == 'subscribe':
+                sub_id = data.get('id', '1')
+                payload = data.get('payload', {})
+                query = payload.get('query', '') if isinstance(payload, dict) else ''
+
+                # Subscription flooding: accept unlimited subs (no limit)
+                await websocket.send(json.dumps({
+                    'id': sub_id,
+                    'type': 'next',
+                    'payload': {
+                        'data': {
+                            'onUpdate': {
+                                'id': sub_id,
+                                'message': f'Subscription {sub_id} active',
+                                'user': auth_user or 'anonymous',
+                                'timestamp': time.time(),
+                            }
+                        }
+                    }
+                }))
+                continue
+
+            # ── GraphQL batch query abuse ─────────────────────────────
+            if isinstance(data, list) and all(isinstance(d, dict) and 'query' in d for d in data):
+                results = []
+                for q in data:
+                    results.append({
+                        'data': {'result': f'Batch {len(results)+1} processed'},
+                    })
+                await websocket.send(json.dumps(results))
+                continue
+
+            # ── GraphQL field suggestion leak ─────────────────────────
+            if data.get('payload', {}).get('query', '') if isinstance(data.get('payload'), dict) else False:
+                query = data['payload']['query']
+                if 'userz' in query or 'passwrd' in query or '__' in query:
+                    await websocket.send(json.dumps({
+                        'errors': [{
+                            'message': f"Cannot query field 'userz'. Did you mean 'users', 'user', 'userRole'?",
+                            'extensions': {
+                                'code': 'GRAPHQL_VALIDATION_FAILED',
+                                'suggestions': ['users', 'user', 'userRole', 'userEmail', 'userToken'],
+                            },
+                        }]
+                    }))
+                    continue
+
+            # ── Deep nesting DoS (accepts deeply nested queries) ─────
+            if msg_type == 'start' or (data.get('payload', {}).get('query', '') if isinstance(data.get('payload'), dict) else ''):
+                query = ''
+                if isinstance(data.get('payload'), dict):
+                    query = data['payload'].get('query', '')
+                nesting = query.count('{') if query else 0
+                if nesting > 5:
+                    # Simulate slow response from deep nesting (vulnerable)
+                    await asyncio.sleep(0.5)
+                    await websocket.send(json.dumps({
+                        'data': {'deeply': {'nested': {'query': {'accepted': True, 'depth': nesting}}}},
+                        'extensions': {'complexity': nesting * 10, 'processingTime': nesting * 100},
+                    }))
+                    continue
 
             # ── Prototype Pollution ───────────────────────────────────
             if '__proto__' in message or 'constructor' in message:
@@ -609,31 +704,59 @@ async def handler(websocket):
                         }))
                     continue
 
-            # ── Custom header acknowledgment ──────────────────────────
+            # ── Heartbeat / ping — auth-aware pong ─────────────────────
             if msg_type == 'ping' or action == 'ping' or not action:
-                await websocket.send(json.dumps({
+                pong = {
                     'type':           'pong',
                     'message':        'pong',
+                    'server':         'Engine.IO/4.1.0',
+                    'framework':      'Socket.IO/4.5.0',
                     'authenticated':  is_auth,
                     'auth_method':    auth_method,
                     'custom_headers': list(custom_hdrs.keys()) if has_custom else [],
                     'request_number': REQUEST_COUNT.get(client_id, 0),
                     'time':           time.time(),
-                }))
+                }
+                # Auth users get extra sensitive data (intentional leak for diff testing)
+                if is_auth:
+                    pong['user']        = auth_user
+                    pong['role']        = auth_role
+                    pong['email']       = f'{auth_user}@corp.com'
+                    pong['balance']     = 9999 if auth_role == 'admin' else 500
+                    pong['token']       = token[:20] + '...' if token else 'n/a'
+                    pong['session']     = 'sess_abc123'
+                    pong['internal_ip'] = '10.0.0.42'
+                    pong['api_key']     = 'sk-live-4f3a8b2c1d0e9f7a6b5c4d3e2f1a0b9c'
+                    pong['admin_panel'] = '/admin/dashboard'
+                    pong['database']    = 'mongodb://prod-db:27017/users'
+                    pong['permissions'] = ['read', 'write', 'delete', 'admin']
+                else:
+                    pong['tip'] = 'Not authenticated. Try Bearer Token or Session Cookie auth.'
+                await websocket.send(json.dumps(pong))
                 continue
 
-            # ── Default: echo — shows auth context ────────────────────
+            # ── Default: echo — shows auth context + framework info ───
             response = {
                 'response':       'echo',
                 'echo':           message[:200],
+                'server':         'Engine.IO/4.1.0',
                 'request_number': REQUEST_COUNT.get(client_id, 0),
                 'authenticated':  is_auth,
                 'auth_method':    auth_method,
             }
-            # Authenticated users get extra context
+            # Authenticated users get extra context (for diff tool testing)
             if is_auth:
                 response['user']           = auth_user
                 response['role']           = auth_role
+                response['email']          = f'{auth_user}@corp.com'
+                response['balance']        = 9999 if auth_role == 'admin' else 500
+                response['token']          = token[:20] + '...' if token else 'n/a'
+                response['session']        = 'sess_abc123'
+                response['internal_ip']    = '10.0.0.42'
+                response['api_key']        = 'sk-live-4f3a8b2c1d0e9f7a6b5c4d3e2f1a0b9c'
+                response['admin_panel']    = '/admin/dashboard'
+                response['database']       = 'mongodb://prod-db:27017/users'
+                response['permissions']    = ['read', 'write', 'delete', 'admin']
                 response['custom_headers'] = list(custom_hdrs.keys())
                 response['tip']            = 'You are authenticated! Try: get_my_profile, admin, notifications'
             else:
@@ -673,8 +796,12 @@ async def main():
     http_thread = threading.Thread(target=_start_http, args=(http_port, http_host), daemon=True)
     http_thread.start()
 
-    # Start WebSocket server (fail fast if port is taken).
-    ws_server = await websockets.serve(handler, ws_host, ws_port, max_size=1024 * 1024)
+    # Start WebSocket server.
+    # Framework fingerprint (Engine.IO/4.1.0, Socket.IO/4.5.0, ws/8.2.0)
+    # is embedded in welcome, pong, and echo JSON responses for CVE detection.
+    ws_server = await websockets.serve(
+        handler, ws_host, ws_port, max_size=1024 * 1024,
+    )
 
     try:
         try:
@@ -734,6 +861,14 @@ async def main():
             box_line("        - API Key : change-me", M),
             box_line("   3. For CLI Scans    :"),
             box_line("        --oob http://127.0.0.1:7000/ --oob-key change-me", M),
+            f"{C}╠" + "═" * (width - 2) + f"╣{R}",
+            section(" [ NEW VULN MODULES (v2.0) ]"),
+            box_line("   > WS Smuggling  : Accepts malformed Upgrade", G),
+            box_line("   > GraphQL WS    : Sub flooding, deep nesting", G),
+            box_line("   > SSTI          : {{7*7}} template injection", G),
+            box_line("   > CVE Fingerprint: Engine.IO/4.1.0 header", G),
+            box_line("   > Diff Vuln     : Auth vs unauth data leak", G),
+            box_line("   > Format String : %s %x %n processed", G),
             f"{C}╚" + "═" * (width - 2) + f"╝{R}"
         ]
         banner = "\n" + "\n".join(lines) + "\n"

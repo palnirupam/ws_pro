@@ -1,0 +1,67 @@
+name: WebSocket Security Scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      target_url:
+        description: 'Target WebSocket URL (wss:// or https://)'
+        required: true
+        type: string
+      fail_on:
+        description: 'Fail threshold (critical, high, medium, low)'
+        required: false
+        default: 'critical'
+        type: choice
+        options:
+          - critical
+          - high
+          - medium
+          - low
+
+jobs:
+  ws-security:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install WS Tester Pro
+        run: pip install -r requirements.txt
+
+      - name: Run WebSocket Security Scan
+        run: |
+          python main.py \
+            --target "${{ inputs.target_url || secrets.WS_TARGET_URL }}" \
+            --output results.sarif \
+            --format sarif \
+            --fast \
+            --fail-on=${{ inputs.fail_on || 'critical' }}
+        env:
+          WS_TARGET_URL: ${{ secrets.WS_TARGET_URL }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      - name: Upload SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: results.sarif
+
+      - name: Upload scan results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ws-security-results
+          path: results.sarif
+          retention-days: 30
