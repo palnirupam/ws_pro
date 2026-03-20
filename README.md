@@ -68,22 +68,31 @@
 
 ```
 ws_pro/
+├── .github/
+│   └── workflows/
+│       └── ws-security.yml    # CI/CD pipeline
 ├── attacks/
 │   ├── auth.py               # JWT attacks, CSWSH, auth bypass
 │   ├── business_logic.py     # Business logic & workflow abuse tests
 │   ├── fuzzer.py             # WebSocket fuzzer (DoS, boundary values, typings)
+│   ├── graphql_ws.py         # GraphQL-over-WebSocket attack module
 │   ├── injection.py          # SQLi, XSS, CMDi, NoSQL, Prototype Pollution
 │   ├── mass_assignment.py    # Mass-assignment style issues
 │   ├── network.py            # Encryption, info disclosure, GraphQL, IDOR
 │   ├── race_condition.py     # Concurrency / race-condition tests
+│   ├── smuggling.py          # WebSocket smuggling & upgrade attacks
 │   ├── ssrf.py               # SSRF-style payload tests
 │   ├── ssti.py               # Server-side template injection tests
 │   ├── subprotocol.py        # WebSocket subprotocol negotiation attacks
 │   └── timing.py             # Timing-based side channels & user enumeration
 ├── core/
+│   ├── auth_profile.py     # Authentication profile management
+│   ├── cve_db.json         # CVE database for known vulnerabilities
+│   ├── cve_matcher.py      # CVE fingerprint matching engine
+│   ├── findings.py         # Thread-safe findings store, CVSS scoring
+│   ├── oob_profile.py      # OOB (Out-of-Band) proof profile
 │   ├── scanner.py          # Endpoint discovery, fingerprinting, connection helpers
-│   ├── ws_proxy.py         # Real WebSocket MITM proxy (bridge + intercept/hold + replay)
-│   └── findings.py         # Thread-safe findings store, CVSS scoring
+│   └── ws_proxy.py         # Real WebSocket MITM proxy (bridge + intercept/hold + replay)
 ├── dashboard/
 │   ├── app.py              # Flask + Socket.IO server
 │   ├── templates/
@@ -92,8 +101,6 @@ ws_pro/
 │       ├── css/app.css     # Styling (dark/light themes, responsive)
 │       └── js/app.js       # Frontend logic
 ├── docs/
-│   ├── dashboard.png              # Legacy screenshot
-│   ├── interceptor.png            # Legacy screenshot
 │   └── screenshots/
 │       ├── findings.png                   # Findings tab with scan results
 │       ├── bug_bounty.png                 # Bug Bounty report generator
@@ -102,6 +109,11 @@ ws_pro/
 │       ├── auto_diff_bypass_detection.png # Auto-Diff CRITICAL bypass demo
 │       └── auto_diff_results.png          # Auto-Diff clean result demo
 ├── logs/                    # Runtime logs (created locally)
+├── profiles/
+│   ├── bug_bounty.json     # Bug bounty scan profile
+│   ├── ci_cd.json          # CI/CD pipeline scan profile
+│   ├── deep_audit.json     # Deep audit scan profile
+│   └── jwt_focus.json      # JWT-focused scan profile
 ├── reports/
 │   ├── generator.py        # HTML report generator (browser view)
 │   ├── pdf_generator.py    # OWASP-format PDF report generator
@@ -111,15 +123,20 @@ ws_pro/
 │   ├── test_core.py         # Unit tests (pytest)
 │   └── test_integration.py  # Integration tests (pytest)
 ├── utils/
+│   ├── diff_engine.py      # Response diff engine for bypass detection
 │   ├── evidence.py         # Evidence data collector
-│   └── logger.py           # File + console logging
+│   ├── logger.py           # File + console logging
+│   └── payload_store.py    # Custom payload storage & management
 ├── main.py                 # CLI entry point (argparse)
 ├── mock_server.py          # Vulnerable test server (15+ scenarios, auth-aware responses)
+├── oob_server.py           # OOB callback server for blind SSRF/XXE proof
+├── Dockerfile              # Docker image build
+├── docker-compose.yml      # Multi-service orchestration (Dashboard + OOB)
+├── pytest.ini              # Pytest configuration
 ├── test_ui.py              # UI smoke checks (local)
 ├── test_ws.py              # WebSocket connectivity checks (local)
 ├── .env.example            # Environment configuration template
 ├── requirements.txt        # Python dependencies
-├── venv/                   # Local virtualenv (recommended; not committed)
 ├── CONTRIBUTING.md         # Contribution guide
 └── README.md               # This file
 ```
