@@ -41,9 +41,12 @@
     </div>
 
     <!-- ── Auth Profile ─────────────────────────────── -->
-    <div class="card" id="authCard">
-      <h3>🔐 Authentication</h3>
-
+    <details class="opts-acc" id="authCard" open>
+      <summary class="opts-summary">
+        <span>🔐 Authentication</span>
+        <span class="opts-chevron">▾</span>
+      </summary>
+      <div class="opts-acc-body">
       <select id="authMethod" onchange="onAuthMethodChange()" style="margin-bottom:8px">
         <option value="">🔓 No Auth (public target)</option>
         <option value="login">👤 Username + Password</option>
@@ -87,20 +90,30 @@
       </button>
       <div id="authStatus" style="font-size:.71rem;text-align:center;min-height:15px;
                                    margin-top:4px;transition:color .3s">—</div>
-    </div>
+      </div>
+    </details>
 
-    <div class="card">
-      <h3>🔑 AI API Key</h3>
+    <details class="opts-acc" open>
+      <summary class="opts-summary">
+        <span>🔑 AI API Key</span>
+        <span class="opts-chevron">▾</span>
+      </summary>
+      <div class="opts-acc-body">
       <div class="key-wrap">
         <input type="password" id="apiKeyInput" placeholder="sk-ant-api03-..." autocomplete="off" spellcheck="false"/>
         <span class="key-eye" onclick="toggleKeyVis()">👁</span>
       </div>
       <button class="btn btn-secondary" onclick="saveApiKey()" style="font-size:.75rem;padding:6px 10px">💾 Save Key</button>
       <div id="apiKeyStatus">—</div>
-    </div>
+      </div>
+    </details>
 
-    <div class="card" id="oobCard">
-      <h3>🛰️ OOB Proof (SSRF/XXE)</h3>
+    <details class="opts-acc" id="oobCard" open>
+      <summary class="opts-summary">
+        <span>🛰️ OOB Proof (SSRF/XXE)</span>
+        <span class="opts-chevron">▾</span>
+      </summary>
+      <div class="opts-acc-body">
       <div class="opt-row" style="margin-top:6px">
         <input type="checkbox" id="optOOB">
         <label for="optOOB">Enable OOB auto-confirm</label>
@@ -114,7 +127,8 @@
       <div style="font-size:.71rem;color:var(--text3);margin-top:4px;line-height:1.3">
         Self-host `oob_server.py` on a public domain/VPS to confirm blind SSRF.
       </div>
-    </div>
+      </div>
+    </details>
 
     <div class="card">
       <h3>⚙️ Options</h3>
@@ -122,30 +136,50 @@
         <button class="btn btn-secondary btn-sm btn-lite" style="width:auto;padding:5px 10px;font-size:.72rem" onclick="selectAllAttacks(true)">✅ Select all</button>
         <button class="btn btn-secondary btn-sm btn-lite" style="width:auto;padding:5px 10px;font-size:.72rem" onclick="selectAllAttacks(false)">🧹 Clear all</button>
       </div>
-      <div class="opt-row"><input type="checkbox" id="optAI"        checked><label for="optAI">🤖 AI analysis</label></div>
-      <div class="opt-row"><input type="checkbox" id="optPlaywright" checked><label for="optPlaywright">🌐 Browser discovery</label></div>
-      <div class="opt-row"><input type="checkbox" id="optJWT"        checked><label for="optJWT">🔑 JWT attacks</label></div>
-      <div class="opt-row"><input type="checkbox" id="optTiming"            ><label for="optTiming">⏱ Timing attacks</label></div>
-      <div class="opt-row"><input type="checkbox" id="optFuzzer"            ><label for="optFuzzer">🧨 Fuzzer</label></div>
-      <div class="opt-row"><input type="checkbox" id="optRace"       checked><label for="optRace">🏎 Race Condition</label></div>
-      <div class="opt-row"><input type="checkbox" id="optSSRF"       checked><label for="optSSRF">🌐 SSRF</label></div>
-      <div class="opt-row"><input type="checkbox" id="optSSTI"       checked><label for="optSSTI">📝 SSTI</label></div>
-      <div class="opt-row"><input type="checkbox" id="optMassAssign" checked><label for="optMassAssign">🔓 Mass Assign</label></div>
-      <div class="opt-row"><input type="checkbox" id="optLogic"      checked><label for="optLogic">🧠 Business Logic</label></div>
-      <div class="opt-row"><input type="checkbox" id="optFastMode"   checked><label for="optFastMode">⚡ Fast mode</label></div>
 
-      <div class="divider"></div>
-      <h3 style="margin:0 0 6px 0;font-size:.78rem;color:var(--text2)">🧪 Baseline tests</h3>
-      <div class="opt-row"><input type="checkbox" id="optEnc"          checked><label for="optEnc">🔒 Encryption check</label></div>
-      <div class="opt-row"><input type="checkbox" id="optInjection"    checked><label for="optInjection">💉 Injection tests</label></div>
-      <div class="opt-row"><input type="checkbox" id="optCSWSH"        checked><label for="optCSWSH">🪪 CSWSH check</label></div>
-      <div class="opt-row"><input type="checkbox" id="optRateLimit"    checked><label for="optRateLimit">🚦 Rate limit check</label></div>
-      <div class="opt-row"><input type="checkbox" id="optMsgSize"      checked><label for="optMsgSize">📦 Message size check</label></div>
-      <div class="opt-row"><input type="checkbox" id="optInfoDisc"     checked><label for="optInfoDisc">🕳 Info disclosure check</label></div>
-      <div class="opt-row"><input type="checkbox" id="optGraphQL"      checked><label for="optGraphQL">🧩 GraphQL check</label></div>
-      <div class="opt-row"><input type="checkbox" id="optIDOR"         checked><label for="optIDOR">🪝 IDOR check</label></div>
-      <div class="opt-row"><input type="checkbox" id="optSubprotocol"  checked><label for="optSubprotocol">🔁 Subprotocol check</label></div>
-      <div class="opt-row"><input type="checkbox" id="optAuthBypass"          ><label for="optAuthBypass">🧱 Auth bypass check</label></div>
+      <details class="opts-acc" open>
+        <summary class="opts-summary">
+          <span>⚡ Attack Modules</span>
+          <span class="opts-chevron">▾</span>
+        </summary>
+        <div class="opts-acc-body">
+          <div class="opts-grid">
+            <div class="opt-row"><input type="checkbox" id="optAI"        checked><label for="optAI">🤖 AI analysis</label></div>
+            <div class="opt-row"><input type="checkbox" id="optPlaywright" checked><label for="optPlaywright">🌐 Browser discovery</label></div>
+            <div class="opt-row"><input type="checkbox" id="optJWT"        checked><label for="optJWT">🔑 JWT attacks</label></div>
+            <div class="opt-row"><input type="checkbox" id="optTiming"            ><label for="optTiming">⏱ Timing attacks</label></div>
+            <div class="opt-row"><input type="checkbox" id="optFuzzer"            ><label for="optFuzzer">🧨 Fuzzer</label></div>
+            <div class="opt-row"><input type="checkbox" id="optRace"       checked><label for="optRace">🏎 Race Condition</label></div>
+            <div class="opt-row"><input type="checkbox" id="optSSRF"       checked><label for="optSSRF">🌐 SSRF</label></div>
+            <div class="opt-row"><input type="checkbox" id="optSSTI"       checked><label for="optSSTI">📝 SSTI</label></div>
+            <div class="opt-row"><input type="checkbox" id="optMassAssign" checked><label for="optMassAssign">🔓 Mass Assign</label></div>
+            <div class="opt-row"><input type="checkbox" id="optLogic"      checked><label for="optLogic">🧠 Business Logic</label></div>
+            <div class="opt-row"><input type="checkbox" id="optFastMode"   checked><label for="optFastMode">⚡ Fast mode</label></div>
+          </div>
+        </div>
+      </details>
+
+      <details class="opts-acc">
+        <summary class="opts-summary">
+          <span>🧪 Baseline Tests</span>
+          <span class="opts-chevron">▾</span>
+        </summary>
+        <div class="opts-acc-body">
+          <div class="opts-grid">
+            <div class="opt-row"><input type="checkbox" id="optEnc"          checked><label for="optEnc">🔒 Encryption check</label></div>
+            <div class="opt-row"><input type="checkbox" id="optInjection"    checked><label for="optInjection">💉 Injection tests</label></div>
+            <div class="opt-row"><input type="checkbox" id="optCSWSH"        checked><label for="optCSWSH">🪪 CSWSH check</label></div>
+            <div class="opt-row"><input type="checkbox" id="optRateLimit"    checked><label for="optRateLimit">🚦 Rate limit check</label></div>
+            <div class="opt-row"><input type="checkbox" id="optMsgSize"      checked><label for="optMsgSize">📦 Message size</label></div>
+            <div class="opt-row"><input type="checkbox" id="optInfoDisc"     checked><label for="optInfoDisc">🕳 Info disclosure</label></div>
+            <div class="opt-row"><input type="checkbox" id="optGraphQL"      checked><label for="optGraphQL">🧩 GraphQL</label></div>
+            <div class="opt-row"><input type="checkbox" id="optIDOR"         checked><label for="optIDOR">🪝 IDOR</label></div>
+            <div class="opt-row"><input type="checkbox" id="optSubprotocol"  checked><label for="optSubprotocol">🔁 Subprotocol</label></div>
+            <div class="opt-row"><input type="checkbox" id="optAuthBypass"          ><label for="optAuthBypass">🧱 Auth bypass</label></div>
+          </div>
+        </div>
+      </details>
+
       <div class="divider"></div>
       <label style="font-size:.73rem;color:var(--text2)">Concurrent threads</label>
       <select id="concurrentCount">
@@ -326,8 +360,20 @@
 
     <!-- Pane: AI -->
     <div class="tab-pane" id="pane-ai">
-      <button class="btn btn-secondary" style="width:auto;padding:7px 15px;margin-bottom:11px;font-size:.78rem" onclick="rerunAI()">🤖 Re-analyze with AI</button>
-      <div id="ai-output">AI analysis will appear here after scan completes...</div>
+      <div class="card ai-card">
+        <h3 class="ai-title">🤖 AI Analysis</h3>
+        <div class="ai-toolbar">
+          <button
+            class="btn btn-secondary"
+            id="aiReanalyzeBtn"
+            style="width:auto;padding:7px 15px;font-size:.78rem"
+            onclick="rerunAI()"
+          >
+            🤖 Re-analyze with AI
+          </button>
+        </div>
+        <div id="ai-output">AI analysis will appear here after scan completes...</div>
+      </div>
     </div>
 
     <!-- Pane: History -->

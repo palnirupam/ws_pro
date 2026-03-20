@@ -84,6 +84,12 @@ socket.on('status',     d => setStatus(d.status));
 
 socket.on('ai_analysis', d => {
   const el = document.getElementById('ai-output');
+  const btn = document.getElementById('aiReanalyzeBtn');
+  if (btn) {
+    btn.disabled = false;
+    const original = btn.dataset.originalLabel || '🤖 Re-analyze with AI';
+    btn.textContent = original;
+  }
   el.style.opacity = '0';
   setTimeout(() => {
     el.textContent = d.analysis || '';
@@ -248,7 +254,17 @@ if ('Notification' in window && Notification.permission === 'default') {
 
 /* ── API Key ────────────────────────────────────────────────── */
 function initApiKey() {
-  socket.emit('check_api_key');
+  // Keep UI responsive across reconnect/reload:
+  // If user already saved a key in sessionStorage, re-send it to backend.
+  const saved = sessionStorage.getItem('ws_api_key') || '';
+  const inp = document.getElementById('apiKeyInput');
+  if (saved && inp && !inp.value) inp.value = saved;
+
+  if (saved) {
+    socket.emit('set_api_key', { key: saved });
+  } else {
+    socket.emit('check_api_key');
+  }
 }
 socket.on('api_key_status', d => {
   const st  = document.getElementById('apiKeyStatus');
@@ -474,36 +490,60 @@ function startScan(resume = false) {
   document.getElementById('stopBtn').disabled = false;
   document.getElementById('pauseBtn').disabled = false;
 
-  socket.emit('start_scan', {
-    url,
-    resume,
-    options: {
-      ai:               document.getElementById('optAI').checked,
-      playwright:       document.getElementById('optPlaywright').checked,
-      jwt:              document.getElementById('optJWT').checked,
-      timing:           document.getElementById('optTiming').checked,
-      fuzzing:          document.getElementById('optFuzzer').checked,
-      race_condition:   document.getElementById('optRace').checked,
-      ssrf:             document.getElementById('optSSRF').checked,
-      ssti:             document.getElementById('optSSTI').checked,
-      mass_assignment:  document.getElementById('optMassAssign').checked,
-      business_logic:   document.getElementById('optLogic').checked,
-      fast_mode:        document.getElementById('optFastMode').checked,
-      enc_check:        document.getElementById('optEnc').checked,
-      injection_tests:  document.getElementById('optInjection').checked,
-      cswsh_check:      document.getElementById('optCSWSH').checked,
-      rate_limit_check: document.getElementById('optRateLimit').checked,
-      msg_size_check:   document.getElementById('optMsgSize').checked,
-      info_disc_check:  document.getElementById('optInfoDisc').checked,
-      graphql_check:    document.getElementById('optGraphQL').checked,
-      idor_check:       document.getElementById('optIDOR').checked,
-      subproto_check:   document.getElementById('optSubprotocol').checked,
-      auth_bypass:      document.getElementById('optAuthBypass').checked,
-      concurrent_count: parseInt(document.getElementById('concurrentCount').value),
-      auth:             getAuthData(),
-      oob:              getOobData(),
-    }
-  });
+  // Capture current checkbox states for debugging + correctness.
+  const opts = {
+    ai:               document.getElementById('optAI').checked,
+    playwright:       document.getElementById('optPlaywright').checked,
+    jwt:              document.getElementById('optJWT').checked,
+    timing:           document.getElementById('optTiming').checked,
+    fuzzing:          document.getElementById('optFuzzer').checked,
+    race_condition:   document.getElementById('optRace').checked,
+    ssrf:             document.getElementById('optSSRF').checked,
+    ssti:             document.getElementById('optSSTI').checked,
+    mass_assignment:  document.getElementById('optMassAssign').checked,
+    business_logic:   document.getElementById('optLogic').checked,
+    fast_mode:        document.getElementById('optFastMode').checked,
+    enc_check:        document.getElementById('optEnc').checked,
+    injection_tests:  document.getElementById('optInjection').checked,
+    cswsh_check:      document.getElementById('optCSWSH').checked,
+    rate_limit_check: document.getElementById('optRateLimit').checked,
+    msg_size_check:   document.getElementById('optMsgSize').checked,
+    info_disc_check:  document.getElementById('optInfoDisc').checked,
+    graphql_check:    document.getElementById('optGraphQL').checked,
+    idor_check:       document.getElementById('optIDOR').checked,
+    subproto_check:   document.getElementById('optSubprotocol').checked,
+    auth_bypass:      document.getElementById('optAuthBypass').checked,
+    concurrent_count: parseInt(document.getElementById('concurrentCount').value),
+    auth:             getAuthData(),
+    oob:              getOobData(),
+  };
+
+  const enabled = [];
+  if (opts.jwt) enabled.push('JWT');
+  if (opts.ssrf) enabled.push('SSRF');
+  if (opts.ssti) enabled.push('SSTI');
+  if (opts.fuzzing) enabled.push('Fuzzer');
+  if (opts.timing) enabled.push('Timing');
+  if (opts.race_condition) enabled.push('Race');
+  if (opts.mass_assignment) enabled.push('Mass Assign');
+  if (opts.business_logic) enabled.push('Business Logic');
+  if (opts.playwright) enabled.push('Browser discovery');
+  if (opts.ai) enabled.push('AI analysis');
+
+  if (opts.enc_check) enabled.push('Enc');
+  if (opts.injection_tests) enabled.push('Injection');
+  if (opts.cswsh_check) enabled.push('CSWSH');
+  if (opts.rate_limit_check) enabled.push('RateLimit');
+  if (opts.msg_size_check) enabled.push('MsgSize');
+  if (opts.info_disc_check) enabled.push('InfoDisc');
+  if (opts.graphql_check) enabled.push('GraphQL');
+  if (opts.idor_check) enabled.push('IDOR');
+  if (opts.subproto_check) enabled.push('Subprotocol');
+  if (opts.auth_bypass) enabled.push('AuthBypass');
+
+  addLog(`🧩 Selected options: ${enabled.join(', ') || 'None'}`, 'info');
+
+  socket.emit('start_scan', { url, resume, options: opts });
   addLog('🚀 Scan started: ' + url, 'info');
 }
 
@@ -1036,6 +1076,12 @@ function exportProxyMessages() {
 
 /* ── AI ─────────────────────────────────────────────────────── */
 function rerunAI() {
+  const btn = document.getElementById('aiReanalyzeBtn');
+  if (btn) {
+    if (!btn.dataset.originalLabel) btn.dataset.originalLabel = btn.textContent.trim();
+    btn.disabled = true;
+    btn.textContent = '⏳ Analyzing...';
+  }
   socket.emit('request_ai_analysis', { findings });
   document.getElementById('ai-output').textContent = '⏳ Analyzing findings...';
   showTab('ai', document.querySelectorAll('.tab')[4]);
